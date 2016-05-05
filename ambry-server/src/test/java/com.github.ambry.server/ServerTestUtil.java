@@ -1,5 +1,5 @@
 /**
- * Copyright 2015 LinkedIn Corp. All rights reserved.
+ * Copyright 2016 LinkedIn Corp. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -248,6 +248,21 @@ public final class ServerTestUtil {
       } catch (MessageFormatException e) {
         Assert.assertEquals(false, true);
       }
+
+      // get blob info
+      GetRequest getRequest3 =
+          new GetRequest(1, "clientid2", MessageFormatFlags.BlobInfo, partitionRequestInfoList, GetOptions.None);
+      channel.send(getRequest3);
+      stream = channel.receive().getInputStream();
+      GetResponse resp3 = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
+      InputStream responseStream = resp3.getInputStream();
+      // verify blob properties.
+      BlobProperties propertyOutput = MessageFormatRecord.deserializeBlobProperties(responseStream);
+      Assert.assertEquals(propertyOutput.getBlobSize(), 31870);
+      Assert.assertEquals(propertyOutput.getServiceId(), "serviceid1");
+      // verify user metadata
+      ByteBuffer userMetadataOutput = MessageFormatRecord.deserializeUserMetadata(responseStream);
+      Assert.assertArrayEquals(userMetadataOutput.array(), usermetadata);
 
       try {
         // get blob data
