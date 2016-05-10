@@ -114,7 +114,6 @@ class PutOperation {
   // To find the PutChunk to hand over the response quickly.
   private final Map<Integer, PutChunk> correlationIdToPutChunk = new HashMap<Integer, PutChunk>();
 
-  private static final int MAX_IN_MEM_CHUNKS = 4;
   private static final Logger logger = LoggerFactory.getLogger(PutOperation.class);
 
   /**
@@ -164,7 +163,7 @@ class PutOperation {
     chunkCounter = -1;
 
     // Initialize chunks
-    putChunks = new PutChunk[Math.min(numDataChunks, MAX_IN_MEM_CHUNKS)];
+    putChunks = new PutChunk[Math.min(numDataChunks, NonBlockingRouter.MAX_IN_MEM_CHUNKS)];
     for (int i = 0; i < putChunks.length; i++) {
       putChunks[i] = new PutChunk();
     }
@@ -195,10 +194,10 @@ class PutOperation {
   /**
    * For this operation, create and populate put requests for chunks (in the form of {@link RequestInfo}) to
    * send out.
-   * @param requestRegistrationCallback the {@link PutRequestRegistrationCallback} to call for every request that gets created
-   *                                    as part of this poll operation.
+   * @param requestRegistrationCallback the {@link RequestRegistrationCallback} to call for every request that gets
+   *                                    created as part of this poll operation.
    */
-  void poll(PutRequestRegistrationCallback requestRegistrationCallback) {
+  void poll(RequestRegistrationCallback<PutOperation> requestRegistrationCallback) {
     if (operationCompleted) {
       return;
     }
@@ -425,7 +424,7 @@ class PutOperation {
     // may not get overridden by a subsequent error, and this variable is meant to store the most relevant error.
     private RouterException chunkException;
     // the state of the current chunk.
-    protected ChunkState state;
+    protected volatile ChunkState state;
     // the ByteBuffer that has the data for the current chunk.
     protected ByteBuffer buf;
     // the OperationTracker used to track the status of requests for the current chunk.
@@ -439,6 +438,8 @@ class PutOperation {
     // map of correlation id to the request metadata for every request issued for the current chunk.
     private final Map<Integer, ChunkPutRequestInfo> correlationIdToChunkPutRequestInfo =
         new TreeMap<Integer, ChunkPutRequestInfo>();
+    // list of buffers that were once associated with this chunk and are not yet freed.
+    private final List<DefunctBufferInfo> defunctBufferInfos = new ArrayList<>();
     private final Logger logger = LoggerFactory.getLogger(PutChunk.class);
 
     /**
@@ -455,11 +456,59 @@ class PutOperation {
       chunkIndex = -1;
       chunkBlobId = null;
       chunkException = null;
-      state = ChunkState.Free;
       failedAttempts = 0;
       partitionId = null;
-      correlationIdToChunkPutRequestInfo.clear();
       attemptedPartitionIds.clear();
+      maybeUpdateDefunctBufferInfos();
+      correlationIdToChunkPutRequestInfo.clear();
+      // this assignment should be the last statement as this immediately makes this chunk available to the
+      // ChunkFiller thread for filling.
+      state = ChunkState.Free;
+    }
+
+    /**
+     * Go through the list of requests for which responses were not received, and if there are any that are not yet
+     * sent out completely, add the associated buffer to the defunct list for freeing in the future.
+     */
+    private void maybeUpdateDefunctBufferInfos() {
+      ArrayList<PutRequest> requestsAwaitingSendCompletion = null;
+      for (Map.Entry<Integer, ChunkPutRequestInfo> entry : correlationIdToChunkPutRequestInfo.entrySet()) {
+        if (!entry.getValue().putRequest.isSendComplete()) {
+          if (requestsAwaitingSendCompletion == null) {
+            requestsAwaitingSendCompletion = new ArrayList<>();
+          }
+          requestsAwaitingSendCompletion.add(entry.getValue().putRequest);
+        }
+      }
+
+      if (requestsAwaitingSendCompletion != null) {
+        // This means that the buffer associated with this PutChunk could get read by the NetworkClient in the
+        // future and assigning this PutChunk to a subsequent chunk of the overall blob could lead to this buffer
+        // getting read and written concurrently, or other undefined behavior. There are multiple ways to handle this,
+        // and the simplest way is to set the buf to null so that it gets allocated afresh if/when this PutChunk gets
+        // assigned for a subsequent chunk of the overall blob. Every time this chunk gets polled, an attempt to clear
+        // out the list will be made.
+        defunctBufferInfos.add(new DefunctBufferInfo(buf, requestsAwaitingSendCompletion));
+        buf = null;
+      }
+    }
+
+    /**
+     * Iterate defunctBufferInfos and possibly free up entries from it.
+     */
+    private void maybeFreeDefunctBuffers() {
+      for (Iterator<DefunctBufferInfo> iter = defunctBufferInfos.iterator(); iter.hasNext(); ) {
+        boolean canBeFreed = true;
+        for (PutRequest putRequest : iter.next().putRequests) {
+          if (!putRequest.isSendComplete()) {
+            canBeFreed = false;
+          }
+        }
+        if (canBeFreed) {
+          // this is where the buffer will be freed if the buffer pool is used. For now, simply remove the reference.
+          iter.remove();
+        }
+      }
     }
 
     /**
@@ -606,17 +655,27 @@ class PutOperation {
     }
 
     /**
-     * Fetch put requests to send for the current data chunk.
      * This is one of two main entry points to this class, the other being {@link #handleResponse(ResponseInfo)}.
      * Apart from fetching requests to send out, this also checks for timeouts of issued requests,
      * status of the operation and anything else that needs to be done within this PutChunk. The callers guarantee
      * that this method is called on all the PutChunks of an operation until either the operation,
      * or the chunk operation is completed.
-     * @param requestFillCallback the {@link PutRequestRegistrationCallback} to call for every request that gets created as
-     *                            part of this poll operation.
+     * @param requestRegistrationCallback the {@link RequestRegistrationCallback} to call for every request that gets
+     *                                    created as part of this poll operation.
      */
-    void poll(PutRequestRegistrationCallback requestFillCallback) {
-      //First, check if any of the existing requests have timed out.
+    void poll(RequestRegistrationCallback<PutOperation> requestRegistrationCallback) {
+      maybeFreeDefunctBuffers();
+      cleanupExpiredInFlightRequests();
+      checkAndMaybeComplete();
+      if (!isComplete()) {
+        fetchRequests(requestRegistrationCallback);
+      }
+    }
+
+    /**
+     * Clean up requests sent out by this operation that have now timed out.
+     */
+    private void cleanupExpiredInFlightRequests() {
       Iterator<Map.Entry<Integer, ChunkPutRequestInfo>> inFlightRequestsIterator =
           correlationIdToChunkPutRequestInfo.entrySet().iterator();
       while (inFlightRequestsIterator.hasNext()) {
@@ -630,12 +689,12 @@ class PutOperation {
           break;
         }
       }
+    }
 
-      checkAndMaybeComplete();
-      if (isComplete()) {
-        return;
-      }
-
+    /**
+     * Fetch {@link PutRequest}s to send for the current data chunk.
+     */
+    private void fetchRequests(RequestRegistrationCallback<PutOperation> requestRegistrationCallback) {
       Iterator<ReplicaId> replicaIterator = operationTracker.getReplicaIterator();
       while (replicaIterator.hasNext()) {
         ReplicaId replicaId = replicaIterator.next();
@@ -644,9 +703,10 @@ class PutOperation {
         PutRequest putRequest = createPutRequest();
         RequestInfo request = new RequestInfo(hostname, port, putRequest);
         int correlationId = putRequest.getCorrelationId();
-        correlationIdToChunkPutRequestInfo.put(correlationId, new ChunkPutRequestInfo(replicaId, time.milliseconds()));
+        correlationIdToChunkPutRequestInfo
+            .put(correlationId, new ChunkPutRequestInfo(replicaId, putRequest, time.milliseconds()));
         correlationIdToPutChunk.put(correlationId, this);
-        requestFillCallback.registerRequestToSend(PutOperation.this, request);
+        requestRegistrationCallback.registerRequestToSend(PutOperation.this, request);
         replicaIterator.remove();
       }
     }
@@ -771,17 +831,41 @@ class PutOperation {
      * A class that holds information about requests sent out by this PutChunk.
      */
     private class ChunkPutRequestInfo {
-      private ReplicaId replicaId;
-      private long startTimeMs;
+      final ReplicaId replicaId;
+      final PutRequest putRequest;
+      final long startTimeMs;
 
       /**
        * Construct a ChunkPutRequestInfo
        * @param replicaId the replica to which this request is being sent.
        * @param startTimeMs the time at which this request was created.
        */
-      ChunkPutRequestInfo(ReplicaId replicaId, long startTimeMs) {
+      ChunkPutRequestInfo(ReplicaId replicaId, PutRequest putRequest, long startTimeMs) {
         this.replicaId = replicaId;
+        this.putRequest = putRequest;
         this.startTimeMs = startTimeMs;
+      }
+    }
+
+    /**
+     * Class that holds the buffer of a chunk that will no longer be used and is kept around only because the
+     * associated requests are not yet completely sent out.
+     */
+    private class DefunctBufferInfo {
+      // the buffer that is now defunct, but not yet freed.
+      final ByteBuffer buf;
+      // Requests that are reading from this buffer.
+      final List<PutRequest> putRequests;
+
+      /**
+       * Construct a DefunctBufferInfo
+       * @param buf the buffer that is now defunct and waiting to be freed.
+       * @param putRequests the requests associated with this buffer whose send completion blocks the freeing of this
+       *                    buffer.
+       */
+      DefunctBufferInfo(ByteBuffer buf, List<PutRequest> putRequests) {
+        this.buf = buf;
+        this.putRequests = putRequests;
       }
     }
   }
