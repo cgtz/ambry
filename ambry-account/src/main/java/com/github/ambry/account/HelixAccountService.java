@@ -14,7 +14,6 @@
 package com.github.ambry.account;
 
 import com.github.ambry.commons.Notifier;
-import com.github.ambry.commons.TopicListener;
 import com.github.ambry.config.HelixPropertyStoreConfig;
 import java.util.Collection;
 import java.util.Collections;
@@ -28,6 +27,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
+import org.I0Itec.zkclient.DataUpdater;
 import org.apache.helix.AccessOption;
 import org.apache.helix.ZNRecord;
 import org.apache.helix.store.HelixPropertyStore;
@@ -83,7 +83,6 @@ class HelixAccountService implements AccountService {
   private final Logger logger = LoggerFactory.getLogger(getClass());
   private final HelixPropertyStore<ZNRecord> helixStore;
   private final AccountServiceMetrics accountServiceMetrics;
-  private final TopicListener<String> listener;
   private final Notifier<String> notifier;
   private final AtomicReference<AccountInfoMap> accountInfoMapRef = new AtomicReference<>(new AccountInfoMap());
   private final ReentrantLock lock = new ReentrantLock();
@@ -117,33 +116,14 @@ class HelixAccountService implements AccountService {
     this.notifier = notifier;
     this.scheduler = scheduler;
     this.storeConfig = storeConfig;
+
     if (notifier == null) {
       logger.warn("Notifier is null. Account updates cannot be notified to other entities. Local account cache may not "
           + "be in sync with remote account data.");
       accountServiceMetrics.nullNotifierCount.inc();
     }
-    listener = (topic, message) -> {
-      checkOpen();
-      logger.trace("Start to process message={} for topic={}", message, topic);
-      try {
-        switch (message) {
-          case FULL_ACCOUNT_METADATA_CHANGE_MESSAGE:
-            logger.trace("Start processing message={} for topic={}", message, topic);
-            readFullAccountAndUpdateCache(FULL_ACCOUNT_METADATA_PATH, true);
-            logger.trace("Completed processing message={} for topic={}", message, topic);
-            break;
-          default:
-            accountServiceMetrics.unrecognizedMessageErrorCount.inc();
-            throw new RuntimeException("Could not understand message=" + message + " for topic=" + topic);
-        }
-      } catch (Exception e) {
-        logger.error("Exception occurred when processing message={} for topic={}.", message, topic, e);
-        accountServiceMetrics.remoteDataCorruptionErrorCount.inc();
-        accountServiceMetrics.fetchRemoteAccountErrorCount.inc();
-      }
-    };
     if (notifier != null) {
-      notifier.subscribe(ACCOUNT_METADATA_CHANGE_TOPIC, listener);
+      notifier.subscribe(ACCOUNT_METADATA_CHANGE_TOPIC, this::onAccountChangeMessage);
     }
     Runnable updater = () -> {
       try {
@@ -229,52 +209,7 @@ class HelixAccountService implements AccountService {
       logger.debug("Accounts={} conflict with the accounts in local cache. Cancel the update operation.", accounts);
       accountServiceMetrics.updateAccountErrorCount.inc();
     } else {
-      hasSucceeded = helixStore.update(FULL_ACCOUNT_METADATA_PATH, currentData -> {
-        ZNRecord newRecord;
-        if (currentData == null) {
-          logger.debug(
-              "ZNRecord does not exist on path={} in HelixPropertyStore when updating accounts. Creating a new ZNRecord.",
-              FULL_ACCOUNT_METADATA_PATH);
-          newRecord = new ZNRecord(ZN_RECORD_ID);
-        } else {
-          newRecord = currentData;
-        }
-        Map<String, String> accountMap = newRecord.getMapField(ACCOUNT_METADATA_MAP_KEY);
-        if (accountMap == null) {
-          logger.debug("AccountMap does not exist in ZNRecord when updating accounts. Creating a new accountMap");
-          accountMap = new HashMap<>();
-        }
-        AccountInfoMap remoteAccountInfoMap;
-        try {
-          remoteAccountInfoMap = new AccountInfoMap(accountMap);
-        } catch (JSONException e) {
-          // Do not depend on Helix to log, so log the error message here.
-          logger.error("Exception occurred when building AccountInfoMap from accountMap={}", accountMap, e);
-          accountServiceMetrics.remoteDataCorruptionErrorCount.inc();
-          throw new IllegalStateException("Exception occurred when building AccountInfoMap from accountMap", e);
-        }
-        // if there is any conflict with the existing record, fail the update. Exception thrown in this updater will
-        // be caught by Helix and helixStore#update will return false.
-        if (hasConflictingAccount(accounts, remoteAccountInfoMap)) {
-          // Throw exception, so that helixStore can capture and terminate the update operation
-          throw new IllegalArgumentException(
-              "Updating accounts failed because one account to update conflicts with existing accounts");
-        } else {
-          for (Account account : accounts) {
-            try {
-              accountMap.put(String.valueOf(account.getId()), account.toJson().toString());
-            } catch (Exception e) {
-              String message = "Updating accounts failed because unexpected exception occurred when updating accountId="
-                  + account.getId() + " accountName=" + account.getName();
-              // Do not depend on Helix to log, so log the error message here.
-              logger.error(message, e);
-              throw new IllegalStateException(message, e);
-            }
-          }
-          newRecord.setMapField(ACCOUNT_METADATA_MAP_KEY, accountMap);
-          return newRecord;
-        }
-      }, AccessOption.PERSISTENT);
+      hasSucceeded = helixStore.update(FULL_ACCOUNT_METADATA_PATH, new ZkUpdater(accounts), AccessOption.PERSISTENT);
     }
     long timeForUpdate = System.currentTimeMillis() - startTimeMs;
     if (hasSucceeded) {
@@ -308,12 +243,39 @@ class HelixAccountService implements AccountService {
   }
 
   /**
+   * To be used to subscribe to a {@link Notifier} topic. Upon receiving a
+   * {@link #FULL_ACCOUNT_METADATA_CHANGE_MESSAGE}, it will check for any account updates.
+   * @param topic The topic.
+   * @param message The message for the topic.
+   */
+  private void onAccountChangeMessage(String topic, String message) {
+    checkOpen();
+    logger.trace("Start to process message={} for topic={}", message, topic);
+    try {
+      switch (message) {
+        case FULL_ACCOUNT_METADATA_CHANGE_MESSAGE:
+          logger.trace("Start processing message={} for topic={}", message, topic);
+          readFullAccountAndUpdateCache(FULL_ACCOUNT_METADATA_PATH, true);
+          logger.trace("Completed processing message={} for topic={}", message, topic);
+          break;
+        default:
+          accountServiceMetrics.unrecognizedMessageErrorCount.inc();
+          throw new RuntimeException("Could not understand message=" + message + " for topic=" + topic);
+      }
+    } catch (Exception e) {
+      logger.error("Exception occurred when processing message={} for topic={}.", message, topic, e);
+      accountServiceMetrics.remoteDataCorruptionErrorCount.inc();
+      accountServiceMetrics.fetchRemoteAccountErrorCount.inc();
+    }
+  }
+
+  /**
    * Reads the full set of {@link Account} metadata from {@link HelixPropertyStore}, and update the local cache.
    *
    * @param pathToFullAccountMetadata The path to read the full set of {@link Account} metadata.
-   * @param isCalledFromListener {@code true} if the caller is the account update listener, {@@code false} otherwise.
+   * @param calledFromListener {@code true} if the caller is the account update listener, {@@code false} otherwise.
    */
-  private void readFullAccountAndUpdateCache(String pathToFullAccountMetadata, boolean isCalledFromListener)
+  private void readFullAccountAndUpdateCache(String pathToFullAccountMetadata, boolean calledFromListener)
       throws JSONException {
     lock.lock();
     try {
@@ -332,41 +294,52 @@ class HelixAccountService implements AccountService {
         } else {
           logger.trace("Start parsing remote account data.");
           AccountInfoMap newAccountInfoMap = new AccountInfoMap(remoteAccountMap);
-          Map<Short, Account> oldIdToAccountMap = accountInfoMapRef.get().idToAccountMap;
-          accountInfoMapRef.set(newAccountInfoMap);
-          Map<Short, Account> idToUpdatedAccounts = new HashMap<>();
-          for (Account newAccount : newAccountInfoMap.getAccounts()) {
-            if (!newAccount.equals(oldIdToAccountMap.get(newAccount.getId()))) {
-              idToUpdatedAccounts.put(newAccount.getId(), newAccount);
-            }
-          }
-          if (idToUpdatedAccounts.size() > 0) {
-            logger.info("Received updates for {} accounts by listener={}. Account IDs={}", idToUpdatedAccounts.size(),
-                isCalledFromListener, idToUpdatedAccounts.keySet());
-            // @todo In long run, this metric is not necessary.
-            if (isCalledFromListener) {
-              accountServiceMetrics.accountUpdatesCapturedByScheduledUpdaterCount.inc();
-            }
-            Collection<Account> updatedAccounts = Collections.unmodifiableCollection(idToUpdatedAccounts.values());
-            for (Consumer<Collection<Account>> accountUpdateConsumer : accountUpdateConsumers) {
-              long startTime = System.currentTimeMillis();
-              try {
-                accountUpdateConsumer.accept(updatedAccounts);
-                long consumerExecutionTimeInMs = System.currentTimeMillis() - startTime;
-                logger.trace("Consumer={} has been notified for account change, took {} ms", accountUpdateConsumer,
-                    consumerExecutionTimeInMs);
-                accountServiceMetrics.accountUpdateConsumerTimeInMs.update(consumerExecutionTimeInMs);
-              } catch (Exception e) {
-                logger.error("Exception occurred when notifying accountUpdateConsumer={}", accountUpdateConsumer, e);
-              }
-            }
-          } else {
-            logger.debug("HelixAccountService is updated with 0 updated account");
-          }
+          AccountInfoMap oldAccountInfoMap = accountInfoMapRef.getAndSet(newAccountInfoMap);
+          notifyAccountUpdateConsumers(newAccountInfoMap, oldAccountInfoMap, calledFromListener);
         }
       }
     } finally {
       lock.unlock();
+    }
+  }
+
+  /**
+   * Logs and notifies account update {@link Consumer}s about any new account changes/creations.
+   * @param newAccountInfoMap the new {@link AccountInfoMap} that has been set.
+   * @param oldAccountInfoMap the {@link AccountInfoMap} that was cached before this change.
+   * @param calledFromListener {@code true} if the caller is the account update listener, {@@code false} otherwise.
+   */
+  private void notifyAccountUpdateConsumers(AccountInfoMap newAccountInfoMap, AccountInfoMap oldAccountInfoMap,
+      boolean calledFromListener) {
+    Map<Short, Account> oldIdToAccountMap = oldAccountInfoMap.idToAccountMap;
+    Map<Short, Account> idToUpdatedAccounts = new HashMap<>();
+    for (Account newAccount : newAccountInfoMap.getAccounts()) {
+      if (!newAccount.equals(oldIdToAccountMap.get(newAccount.getId()))) {
+        idToUpdatedAccounts.put(newAccount.getId(), newAccount);
+      }
+    }
+    if (idToUpdatedAccounts.size() > 0) {
+      logger.info("Received updates for {} accounts. Received from listener={}. Account IDs={}",
+          idToUpdatedAccounts.size(), calledFromListener, idToUpdatedAccounts.keySet());
+      // @todo In long run, this metric is not necessary.
+      if (calledFromListener) {
+        accountServiceMetrics.accountUpdatesCapturedByScheduledUpdaterCount.inc();
+      }
+      Collection<Account> updatedAccounts = Collections.unmodifiableCollection(idToUpdatedAccounts.values());
+      for (Consumer<Collection<Account>> accountUpdateConsumer : accountUpdateConsumers) {
+        long startTime = System.currentTimeMillis();
+        try {
+          accountUpdateConsumer.accept(updatedAccounts);
+          long consumerExecutionTimeInMs = System.currentTimeMillis() - startTime;
+          logger.trace("Consumer={} has been notified for account change, took {} ms", accountUpdateConsumer,
+              consumerExecutionTimeInMs);
+          accountServiceMetrics.accountUpdateConsumerTimeInMs.update(consumerExecutionTimeInMs);
+        } catch (Exception e) {
+          logger.error("Exception occurred when notifying accountUpdateConsumer={}", accountUpdateConsumer, e);
+        }
+      }
+    } else {
+      logger.debug("HelixAccountService is updated with 0 updated account");
     }
   }
 
@@ -397,9 +370,11 @@ class HelixAccountService implements AccountService {
     for (Account account : accountsToSet) {
       Account accountInMap = accountInfoMap.getAccountById(account.getId());
 
-      // @todo if accountInMap is not null, make sure
-      // @todo account.generationId() = accountInfoMap.getById(account.getId()).generationId()+1
-      // @todo the generationId will be added to Account class.
+      if (accountInMap != null && account.getSnapshotVersion() != accountInMap.getSnapshotVersion()) {
+        logger.error("Account to update has a newer snapshot version in zookeeper. expected={}, encountered={}",
+            account.getSnapshotVersion(), accountInMap.getSnapshotVersion());
+        res = true;
+      }
 
       // check for case D described in the javadoc of AccountService
       if (accountInMap == null && accountInfoMap.containsName(account.getName())) {
@@ -408,7 +383,6 @@ class HelixAccountService implements AccountService {
             "Account to update with accountId={} accountName={} conflicts with an existing record with accountId={} accountName={}",
             account.getId(), account.getName(), conflictingAccount.getId(), conflictingAccount.getName());
         res = true;
-        break;
       }
 
       // check for case E described in the javadoc of AccountService
@@ -419,7 +393,6 @@ class HelixAccountService implements AccountService {
             "Account to update with accountId={} accountName={} conflicts with an existing record with accountId={} accountName={}",
             account.getId(), account.getName(), conflictingAccount.getId(), conflictingAccount.getName());
         res = true;
-        break;
       }
     }
     return res;
@@ -542,6 +515,66 @@ class HelixAccountService implements AccountService {
      */
     private Collection<Account> getAccounts() {
       return Collections.unmodifiableCollection(idToAccountMap.values());
+    }
+  }
+
+  /**
+   * An {@link DataUpdater} to be used for updating {@link #FULL_ACCOUNT_METADATA_PATH} inside of
+   * {@link #updateAccounts(Collection)}
+   */
+  private class ZkUpdater implements DataUpdater<ZNRecord> {
+    private final Collection<Account> accounts;
+
+    ZkUpdater(Collection<Account> accounts) {
+      this.accounts = accounts;
+    }
+
+    @Override
+    public ZNRecord update(ZNRecord currentData) {
+      ZNRecord newRecord;
+      if (currentData == null) {
+        logger.debug(
+            "ZNRecord does not exist on path={} in HelixPropertyStore when updating accounts. Creating a new ZNRecord.",
+            FULL_ACCOUNT_METADATA_PATH);
+        newRecord = new ZNRecord(ZN_RECORD_ID);
+      } else {
+        newRecord = currentData;
+      }
+      Map<String, String> accountMap = newRecord.getMapField(ACCOUNT_METADATA_MAP_KEY);
+      if (accountMap == null) {
+        logger.debug("AccountMap does not exist in ZNRecord when updating accounts. Creating a new accountMap");
+        accountMap = new HashMap<>();
+      }
+      AccountInfoMap remoteAccountInfoMap;
+      try {
+        remoteAccountInfoMap = new AccountInfoMap(accountMap);
+      } catch (JSONException e) {
+        // Do not depend on Helix to log, so log the error message here.
+        logger.error("Exception occurred when building AccountInfoMap from accountMap={}", accountMap, e);
+        accountServiceMetrics.remoteDataCorruptionErrorCount.inc();
+        throw new IllegalStateException("Exception occurred when building AccountInfoMap from accountMap", e);
+      }
+      // if there is any conflict with the existing record, fail the update. Exception thrown in this updater will
+      // be caught by Helix and helixStore#update will return false.
+      if (hasConflictingAccount(accounts, remoteAccountInfoMap)) {
+        // Throw exception, so that helixStore can capture and terminate the update operation
+        throw new IllegalArgumentException(
+            "Updating accounts failed because one account to update conflicts with existing accounts");
+      } else {
+        for (Account account : accounts) {
+          try {
+            accountMap.put(String.valueOf(account.getId()), account.toJson().toString());
+          } catch (Exception e) {
+            String message = "Updating accounts failed because unexpected exception occurred when updating accountId="
+                + account.getId() + " accountName=" + account.getName();
+            // Do not depend on Helix to log, so log the error message here.
+            logger.error(message, e);
+            throw new IllegalStateException(message, e);
+          }
+        }
+        newRecord.setMapField(ACCOUNT_METADATA_MAP_KEY, accountMap);
+        return newRecord;
+      }
     }
   }
 }

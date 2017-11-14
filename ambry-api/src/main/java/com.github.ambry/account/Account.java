@@ -110,6 +110,7 @@ public class Account {
   private final short id;
   private final String name;
   private AccountStatus status;
+  private final int snapshotVersion = 0;
   // internal data structure
   private final Map<Short, Container> containerIdToContainerMap = new HashMap<>();
   private final Map<String, Container> containerNameToContainerMap = new HashMap<>();
@@ -168,22 +169,6 @@ public class Account {
   }
 
   /**
-   * Gets the id of the account.
-   * @return The id of the account.
-   */
-  public short getId() {
-    return id;
-  }
-
-  /**
-   * Gets the name of the account.
-   * @return The name of the account.
-   */
-  public String getName() {
-    return name;
-  }
-
-  /**
    * Gets the metadata of the account in {@link JSONObject}.
    * @return The metadata of the account in {@link JSONObject}.
    * @throws JSONException If fails to compose the metadata in {@link JSONObject}.
@@ -212,6 +197,21 @@ public class Account {
     return new Account(json);
   }
 
+  /**
+   * Gets the id of the account.
+   * @return The id of the account.
+   */
+  public short getId() {
+    return id;
+  }
+
+  /**
+   * Gets the name of the account.
+   * @return The name of the account.
+   */
+  public String getName() {
+    return name;
+  }
   /**
    * Gets the status of the account.
    * @return The status of the account.
@@ -248,6 +248,9 @@ public class Account {
     return Collections.unmodifiableCollection(containerIdToContainerMap.values());
   }
 
+  public int getSnapshotVersion() {
+    return snapshotVersion;
+  }
   /**
    * Generates a String representation that uniquely identifies this account. The string is in the format of
    * {@code Account[id]}.
