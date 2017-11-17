@@ -139,7 +139,7 @@ public class AccountUpdateToolTest {
     String containerNameAppendix = "-containerNameAppendix";
     Collection<Account> updatedAccounts = new ArrayList<>();
     for (Account account : accountService.getAllAccounts()) {
-      AccountBuilder accountBuilder = new AccountBuilder(account).setName(account.getName() + accountNameAppendix);
+      AccountBuilder accountBuilder = new AccountBuilder(account).name(account.getName() + accountNameAppendix);
       for (Container container : account.getAllContainers()) {
         accountBuilder.addOrUpdateContainer(
             new ContainerBuilder(container).setName(container.getName() + containerNameAppendix).build());
@@ -158,8 +158,8 @@ public class AccountUpdateToolTest {
   public void testUpdateConflictAccounts() throws Exception {
     Collection<Account> idConflictAccounts = new ArrayList<>();
     // id conflict
-    idConflictAccounts.add(new AccountBuilder((short) 1, "account1", Account.AccountStatus.INACTIVE, null).build());
-    idConflictAccounts.add(new AccountBuilder((short) 1, "account2", Account.AccountStatus.INACTIVE, null).build());
+    idConflictAccounts.add(new AccountBuilder((short) 1, "account1", Account.AccountStatus.INACTIVE).build());
+    idConflictAccounts.add(new AccountBuilder((short) 1, "account2", Account.AccountStatus.INACTIVE).build());
     try {
       createOrUpdateAccountsAndWait(idConflictAccounts);
       fail("Should have thrown.");
@@ -171,8 +171,8 @@ public class AccountUpdateToolTest {
 
     // name conflict
     Collection<Account> nameConflictAccounts = new ArrayList<>();
-    nameConflictAccounts.add(new AccountBuilder((short) 1, "account1", Account.AccountStatus.INACTIVE, null).build());
-    nameConflictAccounts.add(new AccountBuilder((short) 2, "account1", Account.AccountStatus.INACTIVE, null).build());
+    nameConflictAccounts.add(new AccountBuilder((short) 1, "account1", Account.AccountStatus.INACTIVE).build());
+    nameConflictAccounts.add(new AccountBuilder((short) 2, "account1", Account.AccountStatus.INACTIVE).build());
     try {
       createOrUpdateAccountsAndWait(nameConflictAccounts);
       fail("Should have thrown.");

@@ -24,7 +24,6 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
-import org.json.JSONException;
 
 import static org.junit.Assert.*;
 
@@ -133,7 +132,7 @@ class AccountTestUtils {
         containers.add(container);
         idToContainers.put(containerId, container);
       }
-      Account account = new AccountBuilder(accountId, accountName, accountStatus, containers).build();
+      Account account = new AccountBuilder(accountId, accountName, accountStatus).containers(containers).build();
       assertEquals("Wrong number of generated containers for the account", containerCountPerAccount,
           account.getAllContainers().size());
       idToRefAccountMap.put(accountId, account);

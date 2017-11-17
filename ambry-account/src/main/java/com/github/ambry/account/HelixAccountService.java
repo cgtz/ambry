@@ -14,6 +14,7 @@
 package com.github.ambry.account;
 
 import com.github.ambry.commons.Notifier;
+import com.github.ambry.config.HelixAccountServiceConfig;
 import com.github.ambry.config.HelixPropertyStoreConfig;
 import java.util.Collection;
 import java.util.Collections;
@@ -88,7 +89,7 @@ class HelixAccountService implements AccountService {
   private final ReentrantLock lock = new ReentrantLock();
   private final CopyOnWriteArraySet<Consumer<Collection<Account>>> accountUpdateConsumers = new CopyOnWriteArraySet<>();
   private final ScheduledExecutorService scheduler;
-  private final HelixPropertyStoreConfig storeConfig;
+  private final HelixAccountServiceConfig config;
   private volatile boolean isOpen = false;
 
   /**
@@ -107,15 +108,15 @@ class HelixAccountService implements AccountService {
    *                 listen to {@link Account} change messages. Can be {@code null}.
    * @param scheduler A {@link ScheduledExecutorService} that will run thread to update accounts in background.
    *                  {@code null} to disable background updating.
-   * @param storeConfig The configs for {@code HelixAccountService}.
+   * @param config The configs for {@code HelixAccountService}.
    */
   HelixAccountService(HelixPropertyStore<ZNRecord> helixStore, AccountServiceMetrics accountServiceMetrics,
-      Notifier<String> notifier, ScheduledExecutorService scheduler, HelixPropertyStoreConfig storeConfig) {
+      Notifier<String> notifier, ScheduledExecutorService scheduler, HelixAccountServiceConfig config) {
     this.helixStore = Objects.requireNonNull(helixStore, "helixStore cannot be null");
     this.accountServiceMetrics = Objects.requireNonNull(accountServiceMetrics, "accountServiceMetrics cannot be null");
     this.notifier = notifier;
     this.scheduler = scheduler;
-    this.storeConfig = storeConfig;
+    this.config = config;
 
     if (notifier == null) {
       logger.warn("Notifier is null. Account updates cannot be notified to other entities. Local account cache may not "
@@ -135,12 +136,12 @@ class HelixAccountService implements AccountService {
     };
     updater.run();
     if (scheduler != null) {
-      int initialDelay = new Random().nextInt(storeConfig.accountUpdaterPollingIntervalMs + 1);
-      scheduler.scheduleAtFixedRate(updater, initialDelay, storeConfig.accountUpdaterPollingIntervalMs,
+      int initialDelay = new Random().nextInt(config.updaterPollingIntervalMs+ 1);
+      scheduler.scheduleAtFixedRate(updater, initialDelay, config.updaterPollingIntervalMs,
           TimeUnit.MILLISECONDS);
       logger.info(
           "Background account updater will fetch accounts from remote starting {} ms from now and repeat with interval={} ms",
-          initialDelay, storeConfig.accountUpdaterPollingIntervalMs);
+          initialDelay, config.updaterPollingIntervalMs);
     }
     isOpen = true;
   }
@@ -236,7 +237,7 @@ class HelixAccountService implements AccountService {
     if (isOpen) {
       isOpen = false;
       if (scheduler != null) {
-        shutDownExecutorService(scheduler, storeConfig.accountUpdaterShutDownTimeoutMs, TimeUnit.MILLISECONDS);
+        shutDownExecutorService(scheduler, config.updaterShutDownTimeoutMs, TimeUnit.MILLISECONDS);
       }
       helixStore.stop();
     }
@@ -368,30 +369,21 @@ class HelixAccountService implements AccountService {
   private boolean hasConflictingAccount(Collection<Account> accountsToSet, AccountInfoMap accountInfoMap) {
     boolean res = false;
     for (Account account : accountsToSet) {
+      // if the account already exists, check that the snapshot version matches the expected value.
       Account accountInMap = accountInfoMap.getAccountById(account.getId());
-
       if (accountInMap != null && account.getSnapshotVersion() != accountInMap.getSnapshotVersion()) {
-        logger.error("Account to update has a newer snapshot version in zookeeper. expected={}, encountered={}",
-            account.getSnapshotVersion(), accountInMap.getSnapshotVersion());
+        logger.error(
+            "Account to update (accountId={} accountName={}) has a newer than expected snapshot version (expected={}, encountered={})",
+            account.getId(), account.getName(), account.getSnapshotVersion(), accountInMap.getSnapshotVersion());
         res = true;
       }
-
-      // check for case D described in the javadoc of AccountService
-      if (accountInMap == null && accountInfoMap.containsName(account.getName())) {
-        Account conflictingAccount = accountInfoMap.getAccountByName(account.getName());
+      // check that there are no other accounts that conflict with the name of the account to update
+      // (case D and E from the javadoc)
+      Account potentialConflict = accountInfoMap.getAccountByName(account.getName());
+      if (potentialConflict != null && potentialConflict.getId() != account.getId()) {
         logger.error(
-            "Account to update with accountId={} accountName={} conflicts with an existing record with accountId={} accountName={}",
-            account.getId(), account.getName(), conflictingAccount.getId(), conflictingAccount.getName());
-        res = true;
-      }
-
-      // check for case E described in the javadoc of AccountService
-      if (accountInMap != null && !account.getName().equals(accountInMap.getName()) && accountInfoMap.containsName(
-          account.getName())) {
-        Account conflictingAccount = accountInfoMap.getAccountByName(account.getName());
-        logger.error(
-            "Account to update with accountId={} accountName={} conflicts with an existing record with accountId={} accountName={}",
-            account.getId(), account.getName(), conflictingAccount.getId(), conflictingAccount.getName());
+            "Account to update (accountId={} accountName={}) conflicts with an existing record (accountId={} accountName={})",
+            account.getId(), account.getName(), potentialConflict.getId(), potentialConflict.getName());
         res = true;
       }
     }
@@ -519,7 +511,7 @@ class HelixAccountService implements AccountService {
   }
 
   /**
-   * An {@link DataUpdater} to be used for updating {@link #FULL_ACCOUNT_METADATA_PATH} inside of
+   * A {@link DataUpdater} to be used for updating {@link #FULL_ACCOUNT_METADATA_PATH} inside of
    * {@link #updateAccounts(Collection)}
    */
   private class ZkUpdater implements DataUpdater<ZNRecord> {

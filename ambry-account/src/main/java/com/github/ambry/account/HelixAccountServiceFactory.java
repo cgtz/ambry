@@ -15,6 +15,7 @@ package com.github.ambry.account;
 
 import com.codahale.metrics.MetricRegistry;
 import com.github.ambry.commons.Notifier;
+import com.github.ambry.config.HelixAccountServiceConfig;
 import com.github.ambry.config.HelixPropertyStoreConfig;
 import com.github.ambry.config.VerifiableProperties;
 import com.github.ambry.utils.Utils;
@@ -38,6 +39,7 @@ public class HelixAccountServiceFactory implements AccountServiceFactory {
   private static final String HELIX_ACCOUNT_UPDATER_PREFIX = "helix-account-updater";
   private final Logger logger = LoggerFactory.getLogger(getClass());
   private final HelixPropertyStoreConfig storeConfig;
+  private final HelixAccountServiceConfig accountServiceConfig;
   private final AccountServiceMetrics accountServiceMetrics;
   private final Notifier<String> notifier;
 
@@ -50,6 +52,7 @@ public class HelixAccountServiceFactory implements AccountServiceFactory {
   public HelixAccountServiceFactory(VerifiableProperties verifiableProperties, MetricRegistry metricRegistry,
       Notifier<String> notifier) {
     storeConfig = new HelixPropertyStoreConfig(verifiableProperties);
+    accountServiceConfig = new HelixAccountServiceConfig(verifiableProperties);
     accountServiceMetrics = new AccountServiceMetrics(metricRegistry);
     this.notifier = notifier;
   }
@@ -66,10 +69,10 @@ public class HelixAccountServiceFactory implements AccountServiceFactory {
             + "zkClientConnectionTimeoutMs={}, rootPath={}", storeConfig.zkClientConnectString,
         storeConfig.zkClientSessionTimeoutMs, storeConfig.zkClientConnectionTimeoutMs, storeConfig.rootPath);
     ScheduledExecutorService scheduler =
-        storeConfig.accountUpdaterPollingIntervalMs > 0 ? Utils.newScheduler(1, HELIX_ACCOUNT_UPDATER_PREFIX, false)
+        accountServiceConfig.updaterPollingIntervalMs > 0 ? Utils.newScheduler(1, HELIX_ACCOUNT_UPDATER_PREFIX, false)
             : null;
     HelixAccountService helixAccountService =
-        new HelixAccountService(helixStore, accountServiceMetrics, notifier, scheduler, storeConfig);
+        new HelixAccountService(helixStore, accountServiceMetrics, notifier, scheduler, accountServiceConfig);
     long spentTimeMs = System.currentTimeMillis() - startTimeMs;
     logger.info("HelixAccountService started, took {} ms", spentTimeMs);
     accountServiceMetrics.startupTimeInMs.update(spentTimeMs);
