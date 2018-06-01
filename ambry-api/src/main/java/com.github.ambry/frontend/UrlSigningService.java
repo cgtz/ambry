@@ -15,6 +15,7 @@ package com.github.ambry.frontend;
 
 import com.github.ambry.rest.RestRequest;
 import com.github.ambry.rest.RestServiceException;
+import java.util.Map;
 
 
 /**
@@ -31,6 +32,7 @@ public interface UrlSigningService {
    */
   String getSignedUrl(RestRequest restRequest) throws RestServiceException;
 
+//  String getSignedId(String blobId, Map<String, String> properties);
   /**
    * @param restRequest the {@link RestRequest} to check.
    * @return {@code true} if the request is signed request. {@code false} otherwise

@@ -34,7 +34,7 @@ public class AmbryUrlSigningServiceFactory implements UrlSigningServiceFactory {
   @Override
   public UrlSigningService getUrlSigningService() {
     return new AmbryUrlSigningService(config.frontendUrlSignerUploadEndpoint, config.frontendUrlSignerDownloadEndpoint,
-        config.frontendUrlSignerDefaultUrlTtlSecs, config.frontendUrlSignerDefaultMaxUploadSizeBytes,
+        config.frontendUrlSignerDefaultUrlTtlSecs, config.frontendUrlSignerDefaultMaxUploadSizeBytes, 3, 4,
         config.frontendUrlSignerMaxUrlTtlSecs, SystemTime.getInstance());
   }
 }

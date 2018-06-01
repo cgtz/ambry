@@ -11,7 +11,7 @@ CONDITIONS OF ANY KIND, either express or implied.
 This product includes software developed by The Apache Software
 Foundation (http://www.apache.org/).
 
-This product includes/uses Codehale Metrics (https://github.com/dropwizard/metrics)
+This product includes/uses Codehale Metrics (https://github.com/dropwizard/frontendMetrics)
 Copyright (C) 2010 Code Hale, Yammer.com
 License: Apache 2.0
 
@@ -20,7 +20,7 @@ Copyright (c) 2004 QOS.ch
 License: MIT
 
 This product includes/uses JOpt Simple (http://jopt-simple.sourceforge.net)
-Copyright (C) 2016 JOpt Simple 
+Copyright (C) 2016 JOpt Simple
 License: MIT
 
 This product includes/uses Bouncy Castle (http://www.bouncycastle.org/)

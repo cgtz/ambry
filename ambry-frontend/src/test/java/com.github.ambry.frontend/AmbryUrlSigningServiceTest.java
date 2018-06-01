@@ -101,7 +101,7 @@ public class AmbryUrlSigningServiceTest {
    * @return a {@link AmbryUrlSigningService} with some default construction parameters.
    */
   private AmbryUrlSigningService getUrlSignerWithDefaults(Time time) {
-    return new AmbryUrlSigningService(UPLOAD_ENDPOINT, DOWNLOAD_ENDPOINT, DEFAULT_URL_TTL_SECS, DEFAULT_MAX_UPLOAD_SIZE,
+    return new AmbryUrlSigningService(UPLOAD_ENDPOINT, DOWNLOAD_ENDPOINT, DEFAULT_URL_TTL_SECS, DEFAULT_MAX_UPLOAD_SIZE, 3, 4,
         MAX_URL_TTL_SECS, time);
   }
 

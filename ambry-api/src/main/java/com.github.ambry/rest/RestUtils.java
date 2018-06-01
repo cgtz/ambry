@@ -182,6 +182,11 @@ public class RestUtils {
      */
     public static final String SIGNED_URL = "x-ambry-signed-url";
     /**
+     * Boolean field set to "true" for getting chunk upload URLs with {@code GET /signedUrl} that will eventually be
+     * stitched together.
+     */
+    public static final String STITCHED_CHUNK = "x-ambry-stitched-chunk";
+    /**
      * prefix for any header to be set as user metadata for the given blob
      */
     public final static String USER_META_DATA_HEADER_PREFIX = "x-ambry-um-";

@@ -140,7 +140,7 @@ public class AmbryBlobStorageServiceTest {
     accountAndContainerInjector = new AccountAndContainerInjector(accountService, frontendMetrics, frontendConfig);
     urlSigningService = new AmbryUrlSigningService(frontendConfig.frontendUrlSignerUploadEndpoint,
         frontendConfig.frontendUrlSignerDownloadEndpoint, frontendConfig.frontendUrlSignerDefaultUrlTtlSecs,
-        frontendConfig.frontendUrlSignerDefaultMaxUploadSizeBytes, frontendConfig.frontendUrlSignerMaxUrlTtlSecs,
+        frontendConfig.frontendUrlSignerDefaultMaxUploadSizeBytes, 3, 4, frontendConfig.frontendUrlSignerMaxUrlTtlSecs,
         SystemTime.getInstance());
     idConverterFactory = new AmbryIdConverterFactory(verifiableProperties, metricRegistry);
     securityServiceFactory = new AmbrySecurityServiceFactory(verifiableProperties, clusterMap, null, urlSigningService,
