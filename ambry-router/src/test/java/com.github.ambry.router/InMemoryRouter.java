@@ -147,11 +147,6 @@ public class InMemoryRouter implements Router {
   }
 
   @Override
-  public Future<GetBlobResult> getBlob(String blobId, GetBlobOptions options) {
-    return getBlob(blobId, options, null);
-  }
-
-  @Override
   public Future<GetBlobResult> getBlob(String blobId, GetBlobOptions options, Callback<GetBlobResult> callback) {
     FutureResult<GetBlobResult> futureResult = new FutureResult<>();
     handlePrechecks(futureResult, callback);
@@ -192,11 +187,6 @@ public class InMemoryRouter implements Router {
   }
 
   @Override
-  public Future<String> putBlob(BlobProperties blobProperties, byte[] usermetadata, ReadableStreamChannel channel) {
-    return putBlob(blobProperties, usermetadata, channel, null);
-  }
-
-  @Override
   public Future<String> putBlob(BlobProperties blobProperties, byte[] usermetadata, ReadableStreamChannel channel,
       Callback<String> callback) {
     FutureResult<String> futureResult = new FutureResult<>();
@@ -205,11 +195,6 @@ public class InMemoryRouter implements Router {
     operationPool.submit(new InMemoryBlobPoster(postData, blobs, notificationSystem, clusterMap,
         CommonTestUtils.getCurrentBlobIdVersion()));
     return futureResult;
-  }
-
-  @Override
-  public Future<Void> deleteBlob(String blobId, String serviceId) {
-    return deleteBlob(blobId, serviceId, null);
   }
 
   @Override
