@@ -2400,6 +2400,11 @@ class BadRestRequest extends BadRSC implements RestRequest {
   public byte[] getDigest() {
     throw new IllegalStateException("Not implemented");
   }
+
+  @Override
+  public long getBytesReceived() {
+    return 0;
+  }
 }
 
 /**

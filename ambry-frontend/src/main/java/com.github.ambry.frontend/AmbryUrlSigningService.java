@@ -19,6 +19,7 @@ import com.github.ambry.rest.RestServiceErrorCode;
 import com.github.ambry.rest.RestServiceException;
 import com.github.ambry.rest.RestUtils;
 import com.github.ambry.utils.Time;
+import com.github.ambry.utils.Utils;
 import java.io.UnsupportedEncodingException;
 import java.net.URLEncoder;
 import java.util.HashMap;
@@ -104,10 +105,9 @@ public class AmbryUrlSigningService implements UrlSigningService {
             RestServiceErrorCode.InvalidArgs);
     }
 
-    Long blobTtlSecs = null;
     long urlTtlSecs = defaultUrlTtlSecs;
     long maxUploadSize = defaultMaxUploadSize;
-    boolean forStitching = false;
+    boolean stitchedChunk = false;
     Map<String, Object> argsForUrl = new HashMap<>();
     for (Map.Entry<String, Object> entry : args.entrySet()) {
       String name = entry.getKey();
@@ -115,9 +115,6 @@ public class AmbryUrlSigningService implements UrlSigningService {
       if (name.regionMatches(true, 0, AMBRY_PARAMETERS_PREFIX, 0, AMBRY_PARAMETERS_PREFIX.length())
           && value instanceof String) {
         switch (name) {
-          case RestUtils.Headers.TTL:
-            blobTtlSecs = RestUtils.getLongHeader(args, RestUtils.Headers.TTL, true);
-            break;
           case RestUtils.Headers.URL_TTL:
             urlTtlSecs = Math.min(maxUrlTtlSecs, RestUtils.getLongHeader(args, RestUtils.Headers.URL_TTL, true));
             break;
@@ -125,7 +122,7 @@ public class AmbryUrlSigningService implements UrlSigningService {
             maxUploadSize = RestUtils.getLongHeader(args, RestUtils.Headers.MAX_UPLOAD_SIZE, true);
             break;
           case RestUtils.Headers.STITCHED_CHUNK:
-            forStitching = RestUtils.getBooleanHeader(args, RestUtils.Headers.STITCHED_CHUNK, true);
+            stitchedChunk = RestUtils.getBooleanHeader(args, RestUtils.Headers.STITCHED_CHUNK, true);
             break;
           default:
             argsForUrl.put(name, value);
@@ -134,15 +131,16 @@ public class AmbryUrlSigningService implements UrlSigningService {
       }
     }
     if (RestMethod.POST.equals(restMethodInSignedUrl)) {
-      if (forStitching) {
-        // Chunks of a stitched upload have a fixed
-        blobTtlSecs = blobTtlSecs != null ? Math.min(blobTtlSecs, multipartChunkTtlSecs) : multipartChunkTtlSecs;
-        maxUploadSize = Math.min(maxUploadSize, multipartMaxChunkSize);
+      if (stitchedChunk) {
+        // Chunks of a stitched blob have a fixed max size to ensure that the router does not do further chunking as
+        // this is not supported by the current metadata format.
+        maxUploadSize = multipartMaxChunkSize;
+        // They also have a non-optional blob TTL to ensure that chunks that were not stitched within a reasonable time
+        // span are cleaned up.
+        argsForUrl.put(RestUtils.Headers.TTL, multipartChunkTtlSecs);
+        argsForUrl.put(RestUtils.Headers.STITCHED_CHUNK, true);
       }
       argsForUrl.put(RestUtils.Headers.MAX_UPLOAD_SIZE, maxUploadSize);
-      if (blobTtlSecs != null) {
-        argsForUrl.put(RestUtils.Headers.TTL, blobTtlSecs);
-      }
     }
     argsForUrl.put(LINK_EXPIRY_TIME, time.seconds() + urlTtlSecs);
 
