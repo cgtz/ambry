@@ -32,7 +32,6 @@ public interface UrlSigningService {
    */
   String getSignedUrl(RestRequest restRequest) throws RestServiceException;
 
-//  String getSignedId(String blobId, Map<String, String> properties);
   /**
    * @param restRequest the {@link RestRequest} to check.
    * @return {@code true} if the request is signed request. {@code false} otherwise
