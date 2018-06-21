@@ -19,8 +19,11 @@ import com.github.ambry.rest.RestMethod;
 import com.github.ambry.rest.RestRequest;
 import com.github.ambry.rest.RestServiceErrorCode;
 import com.github.ambry.rest.RestServiceException;
+import com.github.ambry.rest.RestUtils;
 import com.github.ambry.router.Callback;
 import com.github.ambry.router.FutureResult;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.Future;
 
 
@@ -28,23 +31,27 @@ import java.util.concurrent.Future;
  * Factory that instantiates an {@link IdConverter} implementation for the frontend.
  */
 public class AmbryIdConverterFactory implements IdConverterFactory {
-
+  private final IdSigningService idSigningService;
   private final FrontendMetrics frontendMetrics;
 
-  public AmbryIdConverterFactory(VerifiableProperties verifiableProperties, MetricRegistry metricRegistry) {
+  public AmbryIdConverterFactory(VerifiableProperties verifiableProperties, MetricRegistry metricRegistry,
+      IdSigningService idSigningService) {
+    this.idSigningService = idSigningService;
     frontendMetrics = new FrontendMetrics(metricRegistry);
   }
 
   @Override
   public IdConverter getIdConverter() {
-    return new AmbryIdConverter(frontendMetrics);
+    return new AmbryIdConverter(idSigningService, frontendMetrics);
   }
 
   private static class AmbryIdConverter implements IdConverter {
     private boolean isOpen = true;
+    private final IdSigningService idSigningService;
     private final FrontendMetrics frontendMetrics;
 
-    AmbryIdConverter(FrontendMetrics frontendMetrics) {
+    AmbryIdConverter(IdSigningService idSigningService, FrontendMetrics frontendMetrics) {
+      this.idSigningService = idSigningService;
       this.frontendMetrics = frontendMetrics;
     }
 
@@ -73,10 +80,17 @@ public class AmbryIdConverterFactory implements IdConverterFactory {
       long startTimeInMs = System.currentTimeMillis();
       if (!isOpen) {
         exception = new RestServiceException("IdConverter is closed", RestServiceErrorCode.ServiceUnavailable);
-      } else if (restRequest.getRestMethod().equals(RestMethod.POST)) {
-        convertedId = "/" + input;
       } else {
-        convertedId = input.startsWith("/") ? input.substring(1) : input;
+        try {
+          if (restRequest.getRestMethod().equals(RestMethod.POST)) {
+            convertedId = "/" + (requiresSignedId(restRequest) ? getSignedId(restRequest, input) : input);
+          } else {
+            String id = input.startsWith("/") ? input.substring(1) : input;
+            convertedId = idSigningService.isIdSigned(id) ? idSigningService.parseSignedId(id).getFirst() : id;
+          }
+        } catch (Exception e) {
+          exception = e;
+        }
       }
       futureResult.done(convertedId, exception);
       if (callback != null) {
@@ -84,6 +98,21 @@ public class AmbryIdConverterFactory implements IdConverterFactory {
       }
       frontendMetrics.idConverterProcessingTimeInMs.update(System.currentTimeMillis() - startTimeInMs);
       return futureResult;
+    }
+
+    /**
+     * @param restRequest the POST {@link RestRequest}
+     * @return {@code true} if the POST requires a signed ID to be returned in the response.
+     * @throws RestServiceException if header parsing fails.
+     */
+    private boolean requiresSignedId(RestRequest restRequest) throws RestServiceException {
+      return RestUtils.getBooleanHeader(restRequest.getArgs(), RestUtils.Headers.STITCHED_CHUNK, false);
+    }
+
+    private String getSignedId(RestRequest restRequest, String blobId) throws RestServiceException {
+      Map<String, String> metadata = new HashMap<>();
+      metadata.put(RestUtils.Headers.BLOB_SIZE, Long.toString(restRequest.getBytesReceived()));
+      return idSigningService.getSignedId(blobId, metadata);
     }
   }
 }
