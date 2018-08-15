@@ -336,7 +336,7 @@ class GetBlobOperation extends GetOperation {
       readIntoCallback = callback;
       readIntoFuture = new FutureResult<>();
       readCalled = true;
-      if (operationException.get() != null) {
+      if (operationException.get() != null || numChunksWrittenOut == numChunksTotal) {
         completeRead();
       }
       routerCallback.onPollReady();
@@ -396,6 +396,7 @@ class GetBlobOperation extends GetOperation {
      */
     void completeRead() {
       if (readIntoCallbackCalled.compareAndSet(false, true)) {
+        System.out.println("we here??");
         Exception e = operationException.get();
         readIntoFuture.done(bytesWritten, e);
         if (readIntoCallback != null) {
@@ -976,6 +977,7 @@ class GetBlobOperation extends GetOperation {
           // in case of Metadata blob, only user-metadata needs decryption if the blob is encrypted
           if (blobType == BlobType.MetadataBlob) {
             logger.trace("Processing stored decryption callback result for Metadata blob {}", blobId);
+            System.out.println("yo");
             initializeDataChunks();
             blobInfo =
                 new BlobInfo(serverBlobProperties, decryptCallbackResultInfo.result.getDecryptedUserMetadata().array());
@@ -1107,6 +1109,10 @@ class GetBlobOperation extends GetOperation {
           int firstChunkIndexInRange = (int) (resolvedByteRange.getStartOffset() / chunkSize);
           int lastChunkIndexInRange = (int) (resolvedByteRange.getEndOffset() / chunkSize);
           keys = keys.subList(firstChunkIndexInRange, lastChunkIndexInRange + 1);
+          System.out.println(resolvedByteRange);
+          System.out.println(firstChunkIndexInRange);
+          System.out.println(lastChunkIndexInRange);
+          System.out.println(keys);
         }
       } catch (IllegalArgumentException e) {
         onInvalidRange(e);
@@ -1120,6 +1126,7 @@ class GetBlobOperation extends GetOperation {
         } else {
           // if blob is encrypted, then decryption is required only in case of GetBlobInfo and GetBlobAll (since user-metadata
           // is expected to be encrypted). Incase of GetBlob, Metadata blob does not need any decryption even if BlobProperties says so
+          System.out.println(getOperationFlag());
           if (getOperationFlag() != MessageFormatFlags.Blob && encryptionKey != null) {
             decryptCallbackResultInfo = new DecryptCallBackResultInfo();
             progressTracker.initializeDecryptionTracker();
@@ -1138,6 +1145,7 @@ class GetBlobOperation extends GetOperation {
                   decryptJobMetricsTracker.onJobCallbackProcessingComplete();
                 }));
           } else {
+            System.out.println("hi");
             initializeDataChunks();
           }
         }
@@ -1150,6 +1158,7 @@ class GetBlobOperation extends GetOperation {
     private void initializeDataChunks() {
       chunkIdIterator = keys.listIterator();
       numChunksTotal = keys.size();
+      System.out.println(keys.size());
       dataChunks = new GetChunk[Math.min(keys.size(), NonBlockingRouter.MAX_IN_MEM_CHUNKS)];
       for (int i = 0; i < dataChunks.length; i++) {
         dataChunks[i] = new GetChunk(chunkIdIterator.nextIndex(), (BlobId) chunkIdIterator.next());
