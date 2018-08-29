@@ -18,6 +18,7 @@ import com.github.ambry.account.Container;
 import com.github.ambry.messageformat.BlobInfo;
 import com.github.ambry.messageformat.BlobProperties;
 import com.github.ambry.router.Callback;
+import com.github.ambry.router.ChunkInfo;
 import com.github.ambry.router.FutureResult;
 import com.github.ambry.router.GetBlobOptions;
 import com.github.ambry.router.GetBlobResult;
@@ -26,6 +27,7 @@ import com.github.ambry.router.ReadableStreamChannel;
 import com.github.ambry.router.Router;
 import com.github.ambry.router.RouterErrorCode;
 import com.github.ambry.router.RouterException;
+import java.util.List;
 import java.util.Random;
 import java.util.concurrent.Future;
 import org.slf4j.Logger;
@@ -130,6 +132,19 @@ class PerfRouter implements Router {
           completeOperation(futureResult, callback, operationResult, exception);
         }
       });
+    }
+    return futureResult;
+  }
+
+  @Override
+  public Future<String> stitchBlob(BlobProperties blobProperties, byte[] usermetadata, List<ChunkInfo> chunksToStitch,
+      Callback<String> callback) {
+    logger.trace("Received stitchBlob call");
+    final FutureResult<String> futureResult = new FutureResult<>();
+    if (!routerOpen) {
+      completeOperation(futureResult, callback, null, ROUTER_CLOSED_EXCEPTION);
+    } else {
+      completeOperation(futureResult, callback, BLOB_ID, null);
     }
     return futureResult;
   }
