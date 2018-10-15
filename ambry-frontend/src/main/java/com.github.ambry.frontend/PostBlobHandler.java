@@ -53,7 +53,26 @@ import static com.github.ambry.frontend.FrontendUtils.*;
 
 
 /**
- * Handler for post blob requests.
+ * Handler for post blob requests. The following request types are handled by {@link PostBlobHandler}:
+ * <h2>Direct uploads</h2>
+ * Direct upload requests treat the body of the request as the content to upload to Ambry. The request path should be
+ * "/". In these requests, the blob properties and user metadata are supplied as headers. See
+ * {@link RestUtils#buildBlobProperties(Map)} and {@link RestUtils#buildBlobProperties(Map)} for more details.
+ * <h2>Stitched uploads</h2>
+ * Stitched upload requests allow clients to stitch together previously uploaded data chunks into a single logical blob.
+ * The request path should be "/stitch" ({@link Operations#STITCH}). This request accepts the same headers as direct
+ * upload requests for supplying the blob properties and user metadata of the stitched blob, but, instead of the actual
+ * blob content, accepts a UTF-8 JSON object that includes the signed IDs for the chunks to stitch.
+ * <h3>Request body format</h3>
+ * The body of the request should be a JSON object that contains an array field with the key,
+ * {@link #SIGNED_CHUNK_IDS_KEY}. Each element of the array should be a signed ID produced by an
+ * {@link IdSigningService} implementation representing a data chunk to be stitched together. The order of the IDs in
+ * the array will be the order in which the data chunks are stitched. For example:
+ * <pre><code>
+ * {
+ *   "signedChunkIds": ["/signedId/id1", "/signedId/id2", "..."]
+ * }
+ * </code></pre>
  */
 class PostBlobHandler {
   private static final Logger LOGGER = LoggerFactory.getLogger(PostBlobHandler.class);

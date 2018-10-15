@@ -192,8 +192,12 @@ public class PostBlobHandlerTest {
     doChunkUploadTest(1024, false, null, null, Utils.Infinite_Time, null);
   }
 
+  /**
+   * Test flows related to the {@link Operations#STITCH} operation.
+   * @throws Exception
+   */
   @Test
-  public void stitchBlobTest() throws Exception {
+  public void stitchedUploadTest() throws Exception {
     idConverterFactory.translation = CONVERTED_ID;
     String uploadSession = UUID.randomUUID().toString();
     long creationTimeMs = System.currentTimeMillis();
@@ -413,7 +417,7 @@ public class PostBlobHandlerTest {
         ((RouterException) executionException.getCause()).getErrorCode());
   }
 
-  // stitchBlobTest() helpers
+  // stitchedUploadTest() helpers
 
   /**
    * Upload chunks using the router directly.
