@@ -71,6 +71,7 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -213,8 +214,8 @@ public class FrontendIntegrationTest {
     doPostGetHeadUpdateDeleteTest(refContentSize, null, null, "unknown_service_id", false, null, null, false);
     doPostGetHeadUpdateDeleteTest(refContentSize, null, null, "unknown_service_id", true, null, null, false);
     // different sizes
-    for (int contentSize : new int[]{0, FRONTEND_CONFIG.chunkedGetResponseThresholdInBytes
-        - 1, FRONTEND_CONFIG.chunkedGetResponseThresholdInBytes, refContentSize}) {
+    for (int contentSize : new int[]{0, FRONTEND_CONFIG.chunkedGetResponseThresholdInBytes - 1,
+        FRONTEND_CONFIG.chunkedGetResponseThresholdInBytes, refContentSize}) {
       doPostGetHeadUpdateDeleteTest(contentSize, refAccount, publicContainer, refAccount.getName(),
           !publicContainer.isCacheable(), refAccount.getName(), publicContainer.getName(), false);
     }
@@ -230,9 +231,8 @@ public class FrontendIntegrationTest {
     Container refContainer = refAccount.getContainerById(Container.DEFAULT_PUBLIC_CONTAINER_ID);
     doPostGetHeadUpdateDeleteTest(0, refAccount, refContainer, refAccount.getName(), !refContainer.isCacheable(),
         refAccount.getName(), refContainer.getName(), true);
-    doPostGetHeadUpdateDeleteTest(FRONTEND_CONFIG.chunkedGetResponseThresholdInBytes * 3, refAccount,
-        refContainer, refAccount.getName(), !refContainer.isCacheable(), refAccount.getName(), refContainer.getName(),
-        true);
+    doPostGetHeadUpdateDeleteTest(FRONTEND_CONFIG.chunkedGetResponseThresholdInBytes * 3, refAccount, refContainer,
+        refAccount.getName(), !refContainer.isCacheable(), refAccount.getName(), refContainer.getName(), true);
 
     // failure case
     // size of content being POSTed is higher than what is allowed via multipart/form-data
@@ -367,7 +367,6 @@ public class FrontendIntegrationTest {
 
   /**
    * Test the stitched (multipart) upload flow.
-   * @todo test the stitch operation once it is implemented.
    * @throws Exception
    */
   @Test
@@ -376,19 +375,18 @@ public class FrontendIntegrationTest {
     Container container = account.getContainerById(Container.DEFAULT_PRIVATE_CONTAINER_ID);
     // setup
     IdSigningService idSigningService = new AmbryIdSigningService();
-    ByteBuffer content = ByteBuffer.wrap(TestUtils.getRandomBytes(10));
     String serviceId = "stitchedUploadTest";
     String contentType = "application/octet-stream";
     String ownerId = "stitchedUploadTest";
-    HttpHeaders headers = new DefaultHttpHeaders();
-    headers.add(RestUtils.Headers.URL_TYPE, RestMethod.POST.name());
-    headers.add(RestUtils.Headers.CHUNK_UPLOAD, "true");
-    setAmbryHeadersForPut(headers, TTL_SECS, !container.isCacheable(), serviceId, contentType, ownerId,
+    HttpHeaders chunkUploadHeaders = new DefaultHttpHeaders();
+    chunkUploadHeaders.add(RestUtils.Headers.URL_TYPE, RestMethod.POST.name());
+    chunkUploadHeaders.add(RestUtils.Headers.CHUNK_UPLOAD, "true");
+    setAmbryHeadersForPut(chunkUploadHeaders, TTL_SECS, !container.isCacheable(), serviceId, contentType, ownerId,
         account.getName(), container.getName());
 
     // POST
     // Get signed URL
-    FullHttpRequest httpRequest = buildRequest(HttpMethod.GET, Operations.GET_SIGNED_URL, headers, null);
+    FullHttpRequest httpRequest = buildRequest(HttpMethod.GET, Operations.GET_SIGNED_URL, chunkUploadHeaders, null);
     ResponseParts responseParts = nettyClient.sendRequest(httpRequest, null, null).get();
     HttpResponse response = getHttpResponse(responseParts);
     assertEquals("Unexpected response status", HttpResponseStatus.OK, response.status());
@@ -397,30 +395,50 @@ public class FrontendIntegrationTest {
     assertNotNull("Did not get a signed POST URL", signedPostUrl);
     discardContent(responseParts.queue, 1);
 
-    // Use signed URL to POST
+    JSONObject stitchRequestBody = new JSONObject();
     URI uri = new URI(signedPostUrl);
-    httpRequest = buildRequest(HttpMethod.POST, uri.getPath() + "?" + uri.getQuery(), null, content);
-    responseParts = nettyClient.sendRequest(httpRequest, null, null).get();
-    String signedID = verifyPostAndReturnBlobId(responseParts);
-    assertTrue("Blob ID for chunk upload must be signed", idSigningService.isIdSigned(signedID.substring(1)));
-    Pair<String, Map<String, String>> idAndMetadata = idSigningService.parseSignedId(signedID.substring(1));
-    // Inspect metadata fields
-    String chunkUploadSession = idAndMetadata.getSecond().get(RestUtils.Headers.SESSION);
-    assertNotNull("x-ambry-chunk-upload-session should be present in signed ID", chunkUploadSession);
-    String blobSize = idAndMetadata.getSecond().get(RestUtils.Headers.BLOB_SIZE);
-    assertNotNull("x-ambry-blob-size should be present in signed ID", blobSize);
-    assertEquals("wrong size value in signed id", content.capacity(), Long.parseLong(blobSize));
-
-    // Use signed ID and blob ID for GET request
-    headers.add(RestUtils.Headers.BLOB_SIZE, content.capacity());
-    // Blob TTL for chunk upload is fixed
-    headers.set(RestUtils.Headers.TTL, FRONTEND_CONFIG.chunkUploadInitialChunkTtlSecs);
-    for (String id : new String[]{signedID, idAndMetadata.getFirst()}) {
-      getBlobAndVerify(id, null, GetOption.None, headers, !container.isCacheable(), content, account.getName(),
-          container.getName());
-      getBlobInfoAndVerify(id, GetOption.None, headers, !container.isCacheable(), account.getName(),
-          container.getName(), null);
+    for (int i = 0; i < 5; i++) {
+      ByteBuffer content = ByteBuffer.wrap(TestUtils.getRandomBytes(10));
+      // Use signed URL to POST
+      httpRequest = buildRequest(HttpMethod.POST, uri.getPath() + "?" + uri.getQuery(), null, content);
+      responseParts = nettyClient.sendRequest(httpRequest, null, null).get();
+      String signedID = verifyPostAndReturnBlobId(responseParts);
+      assertTrue("Blob ID for chunk upload must be signed", idSigningService.isIdSigned(signedID.substring(1)));
+      Pair<String, Map<String, String>> idAndMetadata = idSigningService.parseSignedId(signedID.substring(1));
+      // Inspect metadata fields
+      String chunkUploadSession = idAndMetadata.getSecond().get(RestUtils.Headers.SESSION);
+      assertNotNull("x-ambry-chunk-upload-session should be present in signed ID", chunkUploadSession);
+      String blobSize = idAndMetadata.getSecond().get(RestUtils.Headers.BLOB_SIZE);
+      assertNotNull("x-ambry-blob-size should be present in signed ID", blobSize);
+      assertEquals("wrong size value in signed id", content.capacity(), Long.parseLong(blobSize));
+      HttpHeaders expectedGetHeaders = new DefaultHttpHeaders().add(chunkUploadHeaders);
+      // Use signed ID and blob ID for GET request
+      expectedGetHeaders.add(RestUtils.Headers.BLOB_SIZE, content.capacity());
+      // Blob TTL for chunk upload is fixed
+      expectedGetHeaders.set(RestUtils.Headers.TTL, FRONTEND_CONFIG.chunkUploadInitialChunkTtlSecs);
+      for (String id : new String[]{signedID, idAndMetadata.getFirst()}) {
+        getBlobAndVerify(id, null, GetOption.None, expectedGetHeaders, !container.isCacheable(), content,
+            account.getName(), container.getName());
+        getBlobInfoAndVerify(id, GetOption.None, expectedGetHeaders, !container.isCacheable(), account.getName(),
+            container.getName(), null);
+      }
+      stitchRequestBody.accumulate(PostBlobHandler.SIGNED_CHUNK_IDS_KEY, signedID);
     }
+
+    HttpHeaders stitchHeaders = new DefaultHttpHeaders();
+    setAmbryHeadersForPut(stitchHeaders, TTL_SECS, !container.isCacheable(), serviceId, contentType, ownerId,
+        account.getName(), container.getName());
+    httpRequest = buildRequest(HttpMethod.POST, Operations.STITCH, stitchHeaders,
+        ByteBuffer.wrap(stitchRequestBody.toString().getBytes(StandardCharsets.UTF_8)));
+    responseParts = nettyClient.sendRequest(httpRequest, null, null).get();
+    String stitchedBlobId = verifyPostAndReturnBlobId(responseParts);
+    HttpHeaders expectedGetHeaders = new DefaultHttpHeaders().add(chunkUploadHeaders);
+    // Use signed ID and blob ID for GET request
+    expectedGetHeaders.add(RestUtils.Headers.BLOB_SIZE, 50);
+//    getBlobAndVerify(stitchedBlobId, null, GetOption.None, expectedGetHeaders, !container.isCacheable(), content,
+//        account.getName(), container.getName());
+    getBlobInfoAndVerify(stitchedBlobId, GetOption.None, expectedGetHeaders, !container.isCacheable(), account.getName(),
+        container.getName(), null);
   }
 
   /**
@@ -436,8 +454,7 @@ public class FrontendIntegrationTest {
     assertTrue("No Date header", response.headers().getTimeMillis(HttpHeaderNames.DATE, -1) != -1);
     assertEquals("Content-Length is not 0", 0, HttpUtil.getContentLength(response));
     assertEquals("Unexpected value for " + HttpHeaderNames.ACCESS_CONTROL_ALLOW_METHODS,
-        FRONTEND_CONFIG.optionsAllowMethods,
-        response.headers().get(HttpHeaderNames.ACCESS_CONTROL_ALLOW_METHODS));
+        FRONTEND_CONFIG.optionsAllowMethods, response.headers().get(HttpHeaderNames.ACCESS_CONTROL_ALLOW_METHODS));
     assertEquals("Unexpected value for " + HttpHeaderNames.ACCESS_CONTROL_MAX_AGE,
         FRONTEND_CONFIG.optionsValiditySeconds,
         Long.parseLong(response.headers().get(HttpHeaderNames.ACCESS_CONTROL_MAX_AGE)));
@@ -1133,8 +1150,7 @@ public class FrontendIntegrationTest {
       assertNotNull("Expires value should be non null", expiresValue);
       assertTrue("Expires value should be in future",
           RestUtils.getTimeFromDateString(expiresValue) > System.currentTimeMillis());
-      Assert.assertEquals("Cache-Control value not as expected",
-          "max-age=" + FRONTEND_CONFIG.cacheValiditySeconds,
+      Assert.assertEquals("Cache-Control value not as expected", "max-age=" + FRONTEND_CONFIG.cacheValiditySeconds,
           response.headers().get(RestUtils.Headers.CACHE_CONTROL));
       Assert.assertNull("Pragma value should not have been set", response.headers().get(RestUtils.Headers.PRAGMA));
     }
