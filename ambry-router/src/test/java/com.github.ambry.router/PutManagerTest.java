@@ -1034,8 +1034,9 @@ public class PutManagerTest {
       assertEquals("Expected metadata", BlobDataType.METADATA, origBlobId.getBlobDataType());
       byte[] data = Utils.readBytesFromStream(request.getBlobStream(), (int) request.getBlobSize());
       CompositeBlobInfo compositeBlobInfo = MetadataContentSerDe.deserializeMetadataContentRecord(ByteBuffer.wrap(data),
-          new BlobIdFactory(mockClusterMap));
-      List<StoreKey> dataBlobIds = compositeBlobInfo.getKeys();
+          new BlobIdFactory(mockClusterMap), null);
+      List<StoreKey> dataBlobIds =
+          Utils.transformList(compositeBlobInfo.getChunks(), CompositeBlobInfo.Chunk::getStoreKey);
       long expectedMaxChunkSize;
       long expectedTotalSize;
       int expectedNumChunks;
@@ -1049,7 +1050,8 @@ public class PutManagerTest {
         expectedTotalSize = requestAndResult.putContent.length;
         expectedNumChunks = RouterUtils.getNumChunksForBlobAndChunkSize(requestAndResult.putContent.length, chunkSize);
       }
-      assertEquals("Wrong max chunk size in metadata", expectedMaxChunkSize, compositeBlobInfo.getChunkSize());
+      assertEquals("Wrong max chunk size in metadata", expectedMaxChunkSize,
+          compositeBlobInfo.getChunks().stream().mapToInt(CompositeBlobInfo.Chunk::getSize).max().getAsInt());
       assertEquals("Wrong total size in metadata", expectedTotalSize, compositeBlobInfo.getTotalSize());
       assertEquals("Number of chunks is not as expected", expectedNumChunks, dataBlobIds.size());
       // Verify all dataBlobIds are DataChunk

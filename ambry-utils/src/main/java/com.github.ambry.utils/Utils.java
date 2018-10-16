@@ -34,8 +34,11 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Properties;
 import java.util.Random;
 import java.util.concurrent.ExecutorService;
@@ -44,6 +47,8 @@ import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
+import java.util.function.ToIntBiFunction;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.json.JSONArray;
@@ -899,6 +904,28 @@ public class Utils {
   }
 
   /**
+   * Provides a read-only, transformed view of content in a list. The {@code transform} function will be applied
+   * each time an element is retrieved from the list. This does not create a copy of the data in {@code backingList}.
+   * This method is very similar to Guava's {@code Lists.transform}.
+   * @param backingList the backing {@link List}
+   * @param transform the transform {@link Function} to apply to the list elements.
+   * @return the read-only, transformed list view.
+   */
+  public static <T, U> List<U> transformList(List<T> backingList, Function<? super T, ? extends U> transform) {
+    return new AbstractList<U>() {
+      @Override
+      public U get(int index) {
+        return transform.apply(backingList.get(index));
+      }
+
+      @Override
+      public int size() {
+        return backingList.size();
+      }
+    };
+  }
+
+  /**
    * A thread factory to use for {@link ScheduledExecutorService}s instantiated using
    * {@link #newScheduler(int, String, boolean)}.
    */
@@ -920,6 +947,36 @@ public class Utils {
     @Override
     public Thread newThread(Runnable r) {
       return Utils.newThread(threadNamePrefix + schedulerThreadId.getAndIncrement(), r, isDaemon);
+    }
+  }
+
+  /**
+   * A read-only, transformed view of content in a list. The {@code transform} function will be applied each time an
+   * element is retrieved from the list. This does not create a copy of the data in {@code backingList}.
+   * @param <T> the type of the elements in the backing list.
+   * @param <U> the type of the elements in the transformed view.
+   */
+  private static class TransformedListView<T, U> extends AbstractList<U> {
+    private final List<T> backingList;
+    private final Function<? super T, ? extends U> transform;
+
+    /**
+     * @param backingList the backing {@link List}
+     * @param transform the transform {@link Function} to apply to the list elements.
+     */
+    TransformedListView(List<T> backingList, Function<? super T, ? extends U> transform) {
+      this.backingList = backingList;
+      this.transform = transform;
+    }
+
+    @Override
+    public U get(int index) {
+      return transform.apply(backingList.get(index));
+    }
+
+    @Override
+    public int size() {
+      return backingList.size();
     }
   }
 }

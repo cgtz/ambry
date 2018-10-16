@@ -18,6 +18,7 @@ import com.github.ambry.commons.BlobId;
 import com.github.ambry.commons.BlobIdFactory;
 import com.github.ambry.messageformat.BlobProperties;
 import com.github.ambry.messageformat.BlobType;
+import com.github.ambry.messageformat.CompositeBlobInfoBuilder;
 import com.github.ambry.messageformat.DeleteMessageFormatInputStream;
 import com.github.ambry.messageformat.MessageFormatException;
 import com.github.ambry.messageformat.MessageFormatInputStream;
@@ -549,12 +550,11 @@ public class BlobIdTransformerTest {
      * @throws IOException
      */
     private ByteBuffer createMetadataByteBuffer(String... datachunkIds) throws IOException {
-      List<StoreKey> storeKeys = new ArrayList<>();
+      CompositeBlobInfoBuilder builder = new CompositeBlobInfoBuilder();
       for (String datachunkId : datachunkIds) {
-        storeKeys.add(blobIdFactory.getStoreKey(datachunkId));
+        builder.addChunk(blobIdFactory.getStoreKey(datachunkId), COMPOSITE_BLOB_DATA_CHUNK_SIZE);
       }
-      ByteBuffer output =
-          MetadataContentSerDe.serializeMetadataContent(COMPOSITE_BLOB_DATA_CHUNK_SIZE, COMPOSITE_BLOB_SIZE, storeKeys);
+      ByteBuffer output = MetadataContentSerDe.serializeMetadataContent(builder.build());
       output.flip();
       return output;
     }

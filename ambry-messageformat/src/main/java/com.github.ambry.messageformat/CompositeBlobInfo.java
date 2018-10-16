@@ -14,29 +14,36 @@
 
 package com.github.ambry.messageformat;
 
+import com.github.ambry.router.ByteRange;
 import com.github.ambry.store.StoreKey;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 
 /**
  * This class holds information about a composite blob parsed from the metadata blob. It contains the chunk size,
- * total composite blob size, and a list of keys for the blob's data chunks.
+ * total composite blob size, and a list of chunks for the blob's data chunks.
  */
 public class CompositeBlobInfo {
-  private final int chunkSize;
   private final long totalSize;
-  private final List<StoreKey> keys;
+  private final boolean containsNonUniformChunks;
+  private final ByteRange range;
+  private final List<Chunk> chunks;
 
   /**
    * Construct a {@link CompositeBlobInfo} object.
-   * @param chunkSize The size of each data chunk except the last, which could possibly be smaller.
    * @param totalSize The total size of the composite blob.
-   * @param keys The list of keys for this object's data chunks.
+   * @param chunks The list of chunks for this object's data chunks.
+   * @param range an optional resolved {@link ByteRange} to indicate that this {@link CompositeBlobInfo} only includes
+   *              chunks that include bytes in this range
+   * @param containsNonUniformChunks {@code true} if the composite blob contains intermediate data chunks with different
    */
-  public CompositeBlobInfo(int chunkSize, long totalSize, List<StoreKey> keys) {
-    this.chunkSize = chunkSize;
+  CompositeBlobInfo(long totalSize, List<Chunk> chunks, ByteRange range, boolean containsNonUniformChunks) {
     this.totalSize = totalSize;
-    this.keys = keys;
+    this.chunks = Collections.unmodifiableList(chunks);
+    this.range = range;
+    this.containsNonUniformChunks = containsNonUniformChunks;
   }
 
   /**
@@ -48,18 +55,76 @@ public class CompositeBlobInfo {
   }
 
   /**
-   * Get the size of each data chunk in the composite blob except the last, which could possibly be smaller.
-   * @return The chunk size in bytes.
+   * Get the list of chunks for the composite blob's data chunks.
+   * @return A list of {@link StoreKey}s.
    */
-  public int getChunkSize() {
-    return chunkSize;
+  public List<Chunk> getChunks() {
+    return chunks;
   }
 
   /**
-   * Get the list of keys for the composite blob's data chunks.
-   * @return A list of {@link StoreKey}s.
+   * @return a resolved (defined start/end) {@link ByteRange} if this {@link CompositeBlobInfo} object was instantiated
+   *         with chunks that include bytes in this range. {@code null} if this object contains all chunks.
    */
-  public List<StoreKey> getKeys() {
-    return keys;
+  public ByteRange getRange() {
+    return range;
+  }
+
+  /**
+   * @return {@code true} if the composite blob contains intermediate data chunks with different sizes.
+   */
+  public boolean containsNonUniformChunks() {
+    return containsNonUniformChunks;
+  }
+
+  @Override
+  public String toString() {
+    return "CompositeBlobInfo{" + "totalSize=" + totalSize + ", chunks=" + chunks + '}';
+  }
+
+  /**
+   * Contains metadata (key, size, offset) related to a chunk of a composite blob.
+   */
+  public static class Chunk {
+    private final StoreKey storeKey;
+    private final int size;
+    private final long startOffset;
+
+    /**
+     * @param storeKey the {@link StoreKey} of the chunk.
+     * @param size the size in bytes of the chunk's data.
+     * @param startOffset the offset of the first byte of this chunk, relative to the overall composite blob.
+     */
+    Chunk(StoreKey storeKey, int size, long startOffset) {
+      this.storeKey = storeKey;
+      this.size = size;
+      this.startOffset = startOffset;
+    }
+
+    /**
+     * @return the {@link StoreKey} of the chunk.
+     */
+    public StoreKey getStoreKey() {
+      return storeKey;
+    }
+
+    /**
+     * @return the size in bytes of the chunk's data.
+     */
+    public int getSize() {
+      return size;
+    }
+
+    /**
+     * @return the offset of the first byte of this chunk, relative to the overall composite blob.
+     */
+    public long getStartOffset() {
+      return startOffset;
+    }
+
+    @Override
+    public String toString() {
+      return "Chunk{" + "storeKey=" + storeKey + ", size=" + size + ", startOffset=" + startOffset + '}';
+    }
   }
 }

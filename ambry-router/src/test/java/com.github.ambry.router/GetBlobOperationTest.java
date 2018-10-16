@@ -179,7 +179,7 @@ public class GetBlobOperationTest {
   @Parameterized.Parameters
   public static List<Object[]> data() {
     return Arrays.asList(
-        new Object[][]{{SimpleOperationTracker.class.getSimpleName(), false}, {AdaptiveOperationTracker.class.getSimpleName(), false}, {AdaptiveOperationTracker.class.getSimpleName(), true}});
+        new Object[][]{{SimpleOperationTracker.class.getSimpleName(), false}, {SimpleOperationTracker.class.getSimpleName(), true}, {AdaptiveOperationTracker.class.getSimpleName(), false}});
   }
 
   /**
@@ -1318,6 +1318,7 @@ public class GetBlobOperationTest {
       do {
         ByteBuffer buf = asyncWritableChannel.getNextChunk();
         int bufLength = buf.remaining();
+        System.out.println("hi");
         Assert.assertTrue("total content read should not be greater than length of put content",
             readBytes + bufLength <= bytesToRead);
         while (buf.hasRemaining()) {
@@ -1325,6 +1326,7 @@ public class GetBlobOperationTest {
           readBytes++;
         }
         asyncWritableChannel.resolveOldestChunk(null);
+        System.out.println("yo");
         Assert.assertTrue("ReadyForPollCallback should have been invoked as writable channel callback was called",
             mockNetworkClient.getAndClearWokenUpStatus());
       } while (readBytes < bytesToRead);

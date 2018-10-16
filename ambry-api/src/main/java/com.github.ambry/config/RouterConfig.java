@@ -184,8 +184,16 @@ public class RouterConfig {
    * The version to use for new BlobIds.
    */
   @Config("router.blobid.current.version")
-  @Default("5")
+  @Default("6")
   public final short routerBlobidCurrentVersion;
+
+  /**
+   * Set to {@code true} to allow non-uniformly sized intermediate chunks to be stitched together. This requires support
+   * in the metadata blob content format.
+   */
+  @Config("router.allow.non.uniform.chunks")
+  @Default("false")
+  public final boolean routerAllowNonUniformChunks;
 
   /**
    * The KeyManagementServiceFactory that will be used to fetch {@link com.github.ambry.router.KeyManagementService}
@@ -277,6 +285,7 @@ public class RouterConfig {
     routerBlobidCurrentVersion =
         verifiableProperties.getShortFromAllowedValues("router.blobid.current.version", (short) 6,
             new Short[]{1, 2, 3, 4, 5, 6});
+    routerAllowNonUniformChunks = verifiableProperties.getBoolean("router.allow.non.uniform.chunks", false);
     routerKeyManagementServiceFactory =
         verifiableProperties.getString("router.key.management.service.factory", DEFAULT_KMS_FACTORY);
     routerCryptoServiceFactory =

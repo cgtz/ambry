@@ -27,6 +27,7 @@ import com.github.ambry.commons.ServerErrorCode;
 import com.github.ambry.config.RouterConfig;
 import com.github.ambry.messageformat.BlobProperties;
 import com.github.ambry.messageformat.BlobType;
+import com.github.ambry.messageformat.CompositeBlobInfoBuilder;
 import com.github.ambry.messageformat.MetadataContentSerDe;
 import com.github.ambry.network.Port;
 import com.github.ambry.network.RequestInfo;
@@ -54,6 +55,7 @@ import java.util.TreeMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -326,10 +328,6 @@ class PutOperation {
     });
   }
 
-  /**
-   * Process the list of data chunks provided and prepare a metadata chunk with the provided chunk IDs.
-   * @throws RouterException if validation of the chunks to stitch failed.
-   */
   private void processChunksToStitch() throws RouterException {
     if (chunksToStitch.isEmpty()) {
       // The current metadata format does not support empty chunk lists
@@ -338,12 +336,11 @@ class PutOperation {
     }
     long totalSize = 0;
     long intermediateChunkSize = chunksToStitch.get(0).getChunkSizeInBytes();
-    metadataPutChunk.setIntermediateChunkSize(intermediateChunkSize);
     for (ListIterator<ChunkInfo> iter = chunksToStitch.listIterator(); iter.hasNext(); ) {
       int chunkIndex = iter.nextIndex();
       ChunkInfo chunkInfo = iter.next();
       BlobId chunkId = unwrapChunkInfo(chunkInfo, intermediateChunkSize, !iter.hasNext());
-      metadataPutChunk.addChunkId(chunkId, chunkIndex);
+      metadataPutChunk.addChunkId(chunkId, (int) chunkInfo.getChunkSizeInBytes(), chunkIndex);
       totalSize += chunkInfo.getChunkSizeInBytes();
     }
     blobSize = totalSize;
@@ -362,14 +359,18 @@ class PutOperation {
   private BlobId unwrapChunkInfo(ChunkInfo chunkInfo, long intermediateChunkSize, boolean lastChunk)
       throws RouterException {
     long chunkSize = chunkInfo.getChunkSizeInBytes();
-    long chunkExpirationTimeInMs = chunkInfo.getExpirationTimeInMs();
-
-    if (chunkSize == 0 || chunkSize > intermediateChunkSize || (!lastChunk && chunkSize < intermediateChunkSize)) {
-      throw new RouterException(
-          "Invalid chunkSize for " + (lastChunk ? "last" : "intermediate") + " chunk: " + chunkSize
-              + "; intermediateChunkSize: " + intermediateChunkSize, RouterErrorCode.InvalidPutArgument);
+    if (chunkSize <= 0 || chunkSize > routerConfig.routerMaxPutChunkSizeBytes) {
+      throw new RouterException("Invalid chunk size: " + chunkSize, RouterErrorCode.InvalidPutArgument);
+    }
+    if (!routerConfig.routerAllowNonUniformChunks) {
+      if (chunkSize > intermediateChunkSize || !lastChunk && chunkSize < intermediateChunkSize) {
+        throw new RouterException(
+            "Invalid chunkSize: " + chunkSize + "; intermediateChunkSize: " + intermediateChunkSize,
+            RouterErrorCode.InvalidPutArgument);
+      }
     }
 
+    long chunkExpirationTimeInMs = chunkInfo.getExpirationTimeInMs();
     long metadataExpirationTimeInMs = Utils.addSecondsToEpochTime(passedInBlobProperties.getCreationTimeInMs(),
         passedInBlobProperties.getTimeToLiveInSeconds());
     // the chunk TTL must be at least as long as the metadata blob to ensure that they do not become inaccessible before
@@ -480,7 +481,7 @@ class PutOperation {
     } else if (chunk != metadataPutChunk) {
       // a data chunk has succeeded.
       logger.trace("Successfully put data chunk with blob id : {}", chunk.getChunkBlobId());
-      metadataPutChunk.addChunkId(chunk.chunkBlobId, chunk.chunkIndex);
+      metadataPutChunk.addChunkId(chunk.getChunkBlobId(), chunk.getChunkBlobSize(), chunk.getChunkIndex());
       metadataPutChunk.maybeNotifyForChunkCreation(chunk);
     } else {
       blobId = chunk.getChunkBlobId();
@@ -870,8 +871,8 @@ class PutOperation {
     private int chunkIndex;
     // the blobId of the current chunk.
     protected BlobId chunkBlobId;
-    // the size of raw chunk (prior encryption if applicable)
-    protected long chunkBlobSize;
+    // the size of raw chunk (prior to encryption if applicable)
+    protected int chunkBlobSize;
     // the BlobProperties to associate with this chunk.
     private BlobProperties chunkBlobProperties;
     // the userMetadata associated with the blob
@@ -1014,6 +1015,13 @@ class PutOperation {
     }
 
     /**
+     * @return the size of the blob data in this chunk (prior to encryption, if applicable).
+     */
+    int getChunkBlobSize() {
+      return chunkBlobSize;
+    }
+
+    /**
      * @return the {@link RouterException}, if any, encountered for the current chunk.
      */
     RouterException getChunkException() {
@@ -1070,7 +1078,7 @@ class PutOperation {
     private void prepareForSending() {
       try {
         // Determine data type to set
-        BlobDataType blobDataType = null;
+        BlobDataType blobDataType;
         if (isMetadataChunk()) {
           blobDataType = BlobDataType.METADATA;
         } else if (chunkIndex == 0) {
@@ -1090,7 +1098,6 @@ class PutOperation {
             new BlobId(routerConfig.routerBlobidCurrentVersion, BlobIdType.NATIVE, clusterMap.getLocalDatacenterId(),
                 passedInBlobProperties.getAccountId(), passedInBlobProperties.getContainerId(), partitionId,
                 passedInBlobProperties.isEncrypted(), blobDataType);
-
         chunkBlobProperties = new BlobProperties(chunkBlobSize, passedInBlobProperties.getServiceId(),
             passedInBlobProperties.getOwnerId(), passedInBlobProperties.getContentType(),
             passedInBlobProperties.isPrivate(), passedInBlobProperties.getTimeToLiveInSeconds(),
@@ -1501,9 +1508,8 @@ class PutOperation {
    * on it.
    */
   private class MetadataPutChunk extends PutChunk {
-    private final TreeMap<Integer, StoreKey> indexToChunkIds;
-    private int intermediateChunkSize = routerConfig.routerMaxPutChunkSizeBytes;
-    private Pair<? extends StoreKey, BlobProperties> firstChunkIdAndProperties = null;
+    private final TreeMap<Integer, Pair<StoreKey, Integer>> indexToChunkIds;
+    private Pair<StoreKey, BlobProperties> firstChunkIdAndProperties = null;
 
     /**
      * Initialize the MetadataPutChunk.
@@ -1520,28 +1526,13 @@ class PutOperation {
     }
 
     /**
-     * Change the max chunk size option to support stitching chunks where the intermediate chunk sizes differ from
-     * the current router chunking configuration. This setter is temporary and will be removed once a new metadata
-     * blob format is introduced that supports intermediate chunks of arbitrary size.
-     * @param intermediateChunkSize the chunk size for the intermediate (not last) data chunks listed in the metadata
-     *                              blob.
-     * @throws RouterException if the intermediate chunk size is invalid.
-     */
-    void setIntermediateChunkSize(long intermediateChunkSize) throws RouterException {
-      if (intermediateChunkSize <= 0 || intermediateChunkSize > routerConfig.routerMaxPutChunkSizeBytes) {
-        throw new RouterException("Invalid intermediate chunk size: " + intermediateChunkSize,
-            RouterErrorCode.InvalidPutArgument);
-      }
-      this.intermediateChunkSize = (int) intermediateChunkSize;
-    }
-
-    /**
      * Add the given blobId of a successfully put data chunk to the metadata at its position in the overall blob.
      * @param chunkBlobId the blobId of the associated data chunk
+     * @param chunkBlobSize
      * @param chunkIndex the position of the associated data chunk in the overall blob.
      */
-    void addChunkId(BlobId chunkBlobId, int chunkIndex) {
-      indexToChunkIds.put(chunkIndex, chunkBlobId);
+    void addChunkId(BlobId chunkBlobId, int chunkBlobSize, int chunkIndex) {
+      indexToChunkIds.put(chunkIndex, new Pair<>(chunkBlobId, chunkBlobSize));
     }
 
     /**
@@ -1603,13 +1594,15 @@ class PutOperation {
               passedInBlobProperties.getAccountId(), passedInBlobProperties.getContainerId(),
               passedInBlobProperties.isEncrypted(), passedInBlobProperties.getExternalAssetTag());
       if (isStitchOperation() || getNumDataChunks() > 1) {
+        CompositeBlobInfoBuilder builder = new CompositeBlobInfoBuilder();
         // values returned are in the right order as TreeMap returns them in key-order.
-        List<StoreKey> orderedChunkIdList = new ArrayList<>(indexToChunkIds.values());
-        buf = MetadataContentSerDe.serializeMetadataContent(intermediateChunkSize, getBlobSize(), orderedChunkIdList);
+        indexToChunkIds.values()
+            .forEach(storeKeyAndSize -> builder.addChunk(storeKeyAndSize.getFirst(), storeKeyAndSize.getSecond()));
+        buf = MetadataContentSerDe.serializeMetadataContent(builder.build());
         onFillComplete(false);
       } else {
         // if there is only one chunk
-        blobId = (BlobId) indexToChunkIds.get(0);
+        blobId = (BlobId) indexToChunkIds.get(0).getFirst();
         state = ChunkState.Complete;
         operationCompleted = true;
       }
@@ -1619,7 +1612,7 @@ class PutOperation {
      * @return a list of all of the successfully put chunk ids associated with this blob
      */
     List<StoreKey> getSuccessfullyPutChunkIds() {
-      return new ArrayList<>(indexToChunkIds.values());
+      return indexToChunkIds.values().stream().map(Pair::getFirst).collect(Collectors.toList());
     }
 
     /**

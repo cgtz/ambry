@@ -13,6 +13,7 @@
  */
 package com.github.ambry.messageformat;
 
+import com.github.ambry.router.ByteRange;
 import com.github.ambry.store.StoreKey;
 import com.github.ambry.store.StoreKeyFactory;
 import com.github.ambry.utils.ByteBufferInputStream;
@@ -24,6 +25,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,6 +56,7 @@ public class MessageFormatRecord {
   public static final short Blob_Version_V1 = 1;
   public static final short Blob_Version_V2 = 2;
   public static final short Metadata_Content_Version_V2 = 2;
+  public static final short Metadata_Content_Version_V3 = 3;
   public static final int Message_Header_Invalid_Relative_Offset = -1;
 
   static short headerVersionToUse = Message_Header_Version_V2;
@@ -579,7 +582,7 @@ public class MessageFormatRecord {
   }
 
   /**
-   *
+   * <pre>
    *  - - - - - - - - - - - - - - - - - - -- - -- - - - - - - - - - - - - -  - - - - - - - - - - - - - - - - - - - -
    * |         |              |                 |               |           |               |           |           |
    * | version | payload size | Blob Encryption | Blob Property | Update    | User Metadata | Blob      | Crc       |
@@ -612,7 +615,7 @@ public class MessageFormatRecord {
    *  relative offset   blob property record and user metadata record exist
    *
    *  crc             - The crc of the message header
-   *
+   * </pre>
    */
   public static class MessageHeader_Format_V2 implements MessageHeader_Format {
     private ByteBuffer buffer;
@@ -1259,8 +1262,8 @@ public class MessageFormatRecord {
     public static ByteBuffer deserializeUserMetadataRecord(CrcInputStream crcStream)
         throws IOException, MessageFormatException {
       DataInputStream dataStream = new DataInputStream(crcStream);
-      int usermetadataSize = dataStream.readInt();
-      byte[] userMetadaBuffer = Utils.readBytesFromStream(dataStream, usermetadataSize);
+      int userMetadataSize = dataStream.readInt();
+      byte[] userMetadataBuffer = Utils.readBytesFromStream(dataStream, userMetadataSize);
       long actualCRC = crcStream.getValue();
       long expectedCRC = dataStream.readLong();
       if (actualCRC != expectedCRC) {
@@ -1268,7 +1271,7 @@ public class MessageFormatRecord {
             "corrupt data while parsing user metadata Expected CRC " + expectedCRC + " Actual CRC " + actualCRC);
         throw new MessageFormatException("User metadata is corrupt", MessageFormatErrorCodes.Data_Corrupt);
       }
-      return ByteBuffer.wrap(userMetadaBuffer);
+      return ByteBuffer.wrap(userMetadataBuffer);
     }
   }
 
@@ -1428,23 +1431,25 @@ public class MessageFormatRecord {
     /**
      * Serialize a metadata content record.
      * @param outputBuffer The buffer to serialize into.
-     * @param chunkSize The size of each data chunk except the last, which could possibly be smaller.
-     * @param totalSize The total size of the object this metadata describes.
+     * @param compositeBlobInfo The {@link CompositeBlobInfo} to serialize.
      */
-    public static void serializeMetadataContentRecord(ByteBuffer outputBuffer, int chunkSize, long totalSize,
-        List<StoreKey> keys) {
-      if (chunkSize <= 0 || ((totalSize + chunkSize - 1) / chunkSize) != keys.size()) {
-        throw new IllegalArgumentException("Invalid totalSize or chunkSize");
-      }
-      int keySize = keys.get(0).sizeInBytes();
+    public static void serializeMetadataContentRecord(ByteBuffer outputBuffer, CompositeBlobInfo compositeBlobInfo) {
+      CompositeBlobInfo.Chunk firstChunk = compositeBlobInfo.getChunks().get(0);
+      int keySize = firstChunk.getStoreKey().sizeInBytes();
+      int maxChunkSize = firstChunk.getSize();
       outputBuffer.putShort(Metadata_Content_Version_V2);
-      outputBuffer.putInt(chunkSize);
-      outputBuffer.putLong(totalSize);
-      for (StoreKey storeKey : keys) {
-        if (storeKey.sizeInBytes() != keySize) {
+      outputBuffer.putInt(maxChunkSize);
+      outputBuffer.putLong(compositeBlobInfo.getTotalSize());
+      Iterator<CompositeBlobInfo.Chunk> iter = compositeBlobInfo.getChunks().iterator();
+      while (iter.hasNext()) {
+        CompositeBlobInfo.Chunk chunk = iter.next();
+        if (chunk.getStoreKey().sizeInBytes() != keySize) {
           throw new IllegalArgumentException("Keys are not of same size");
         }
-        outputBuffer.put(storeKey.toBytes());
+        if (chunk.getSize() > maxChunkSize || (iter.hasNext() && chunk.getSize() < maxChunkSize)) {
+          throw new IllegalArgumentException("Invalid chunk size");
+        }
+        outputBuffer.put(chunk.getStoreKey().toBytes());
       }
     }
 
@@ -1452,21 +1457,89 @@ public class MessageFormatRecord {
      * Deserialize a metadata content record from a stream.
      * @param stream The stream to read the serialized record from.
      * @param storeKeyFactory The factory to use for parsing keys in the serialized metadata content record.
-     * @return A {@link CompositeBlobInfo} object with the chunk size and list of keys from the record.
+     * @param range an optional {@link ByteRange} to filter the chunks returned by. If this argument is supplied, the
+     *              returned {@link CompositeBlobInfo} will only include chunks that include bytes in this range.
+     * @return A {@link CompositeBlobInfo} object with the chunk size and keys from the record.
+     * @throws IOException
+     */
+    public static CompositeBlobInfo deserializeMetadataContentRecord(DataInputStream stream,
+        StoreKeyFactory storeKeyFactory, ByteRange range) throws IOException {
+      int maxChunkSize = stream.readInt();
+      long totalSize = stream.readLong();
+      range = range != null ? range.toResolvedByteRange(totalSize) : null;
+      long chunkOffset = 0L;
+      List<CompositeBlobInfo.Chunk> chunks = new ArrayList<>();
+      while (chunkOffset < totalSize) {
+        StoreKey storeKey = storeKeyFactory.getStoreKey(stream);
+        long nextChunkOffset = Math.min(chunkOffset + maxChunkSize, totalSize);
+        if (range == null || (range.getStartOffset() < nextChunkOffset && range.getEndOffset() >= chunkOffset)) {
+          chunks.add(new CompositeBlobInfo.Chunk(storeKey, (int) (nextChunkOffset - chunkOffset), chunkOffset));
+        }
+        chunkOffset = nextChunkOffset;
+      }
+      return new CompositeBlobInfo(totalSize, chunks, range, false);
+    }
+  }
+
+  public static class Metadata_Content_Format_V3 {
+    private static final int Chunk_Size_Field_Size_In_Bytes = 4;
+    private static final int Total_Size_Field_Size_In_Bytes = 8;
+
+    /**
+     * Get the total size of the metadata content record.
+     * @param keySize The size of each key in bytes.
+     * @param numberOfKeys The total number of keys.
+     * @return The total size in bytes.
+     */
+    public static int getMetadataContentSize(int keySize, int numberOfKeys) {
+      return Version_Field_Size_In_Bytes + Total_Size_Field_Size_In_Bytes + numberOfKeys * (keySize
+          + Chunk_Size_Field_Size_In_Bytes);
+    }
+
+    /**
+     * Serialize a metadata content record.
+     * @param outputBuffer The buffer to serialize into.
+     * @param compositeBlobInfo The {@link CompositeBlobInfo} to serialize.
+     */
+    public static void serializeMetadataContentRecord(ByteBuffer outputBuffer, CompositeBlobInfo compositeBlobInfo) {
+      int keySize = compositeBlobInfo.getChunks().get(0).getStoreKey().sizeInBytes();
+      outputBuffer.putShort(Metadata_Content_Version_V3);
+      outputBuffer.putLong(compositeBlobInfo.getTotalSize());
+      for (CompositeBlobInfo.Chunk chunk : compositeBlobInfo.getChunks()) {
+        if (chunk.getStoreKey().sizeInBytes() != keySize) {
+          throw new IllegalArgumentException("Keys are not of same size");
+        }
+        outputBuffer.put(chunk.getStoreKey().toBytes());
+        outputBuffer.putInt(chunk.getSize());
+      }
+    }
+
+    /**
+     * Deserialize a metadata content record from a stream.
+     * @param stream The stream to read the serialized record from.
+     * @param storeKeyFactory The factory to use for parsing keys in the serialized metadata content record.
+     * @param range an optional {@link ByteRange} to filter the chunks returned by. If this argument is supplied, the
+     *              returned {@link CompositeBlobInfo} will only include chunks that include bytes in this range.
+     * @return A {@link CompositeBlobInfo} object with the chunk size and keys from the record.
      * @throws IOException
      * @throws MessageFormatException
      */
     public static CompositeBlobInfo deserializeMetadataContentRecord(DataInputStream stream,
-        StoreKeyFactory storeKeyFactory) throws IOException, MessageFormatException {
-      List<StoreKey> keys = new ArrayList<StoreKey>();
-      int chunkSize = stream.readInt();
+        StoreKeyFactory storeKeyFactory, ByteRange range) throws IOException {
       long totalSize = stream.readLong();
-      long numberOfKeys = (totalSize + chunkSize - 1) / chunkSize;
-      for (int i = 0; i < numberOfKeys; i++) {
+      range = range != null ? range.toResolvedByteRange(totalSize) : null;
+      long chunkOffset = 0L;
+      List<CompositeBlobInfo.Chunk> chunks = new ArrayList<>();
+      while (chunkOffset < totalSize) {
         StoreKey storeKey = storeKeyFactory.getStoreKey(stream);
-        keys.add(storeKey);
+        int chunkSize = stream.readInt();
+        long nextChunkOffset = chunkOffset + chunkSize;
+        if (range == null || (range.getStartOffset() < nextChunkOffset && range.getEndOffset() >= chunkOffset)) {
+          chunks.add(new CompositeBlobInfo.Chunk(storeKey, chunkSize, chunkOffset));
+        }
+        chunkOffset = nextChunkOffset;
       }
-      return new CompositeBlobInfo(chunkSize, totalSize, keys);
+      return new CompositeBlobInfo(totalSize, chunks, range, false);
     }
   }
 }

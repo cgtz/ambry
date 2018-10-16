@@ -18,6 +18,7 @@ import com.github.ambry.messageformat.BlobData;
 import com.github.ambry.messageformat.BlobProperties;
 import com.github.ambry.messageformat.BlobType;
 import com.github.ambry.messageformat.CompositeBlobInfo;
+import com.github.ambry.messageformat.CompositeBlobInfoBuilder;
 import com.github.ambry.messageformat.MessageFormatErrorCodes;
 import com.github.ambry.messageformat.MessageFormatException;
 import com.github.ambry.messageformat.MessageFormatRecord;
@@ -31,6 +32,7 @@ import com.github.ambry.store.StoreKeyFactory;
 import com.github.ambry.store.TransformationOutput;
 import com.github.ambry.store.Transformer;
 import com.github.ambry.utils.ByteBufferInputStream;
+import com.github.ambry.utils.Utils;
 import java.io.DataInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -162,13 +164,15 @@ public class BlobIdTransformer implements Transformer {
       if (blobData.getBlobType().equals(BlobType.MetadataBlob)) {
         ByteBuffer serializedMetadataContent = blobData.getStream().getByteBuffer();
         CompositeBlobInfo compositeBlobInfo =
-            MetadataContentSerDe.deserializeMetadataContentRecord(serializedMetadataContent, storeKeyFactory);
-        Map<StoreKey, StoreKey> convertedKeys = storeKeyConverter.convert(compositeBlobInfo.getKeys());
-        List<StoreKey> newKeys = new ArrayList<>();
+            MetadataContentSerDe.deserializeMetadataContentRecord(serializedMetadataContent, storeKeyFactory, null);
+        Map<StoreKey, StoreKey> convertedKeys = storeKeyConverter.convert(
+            Utils.transformList(compositeBlobInfo.getChunks(), CompositeBlobInfo.Chunk::getStoreKey));
         boolean isOldMetadataKeyDifferentFromNew = !oldMessageInfo.getStoreKey().getID().equals(newKey.getID());
         short metadataAccountId = newBlobId.getAccountId();
         short metadataContainerId = newBlobId.getContainerId();
-        for (StoreKey oldDataChunkKey : compositeBlobInfo.getKeys()) {
+        CompositeBlobInfoBuilder compositeBlobInfoBuilder = new CompositeBlobInfoBuilder();
+        for (CompositeBlobInfo.Chunk oldDataChunk : compositeBlobInfo.getChunks()) {
+          StoreKey oldDataChunkKey = oldDataChunk.getStoreKey();
           StoreKey newDataChunkKey = convertedKeys.get(oldDataChunkKey);
           if (newDataChunkKey == null) {
             throw new IllegalStateException("Found metadata chunk with a deprecated data chunk. " + " Old MetadataID: "
@@ -200,10 +204,9 @@ public class BlobIdTransformer implements Transformer {
                     + newDataChunkBlobId.getAccountId() + " Datachunk ContainerId: "
                     + newDataChunkBlobId.getContainerId());
           }
-          newKeys.add(newDataChunkKey);
+          compositeBlobInfoBuilder.addChunk(newDataChunkKey, oldDataChunk.getSize());
         }
-        ByteBuffer metadataContent = MetadataContentSerDe.serializeMetadataContent(compositeBlobInfo.getChunkSize(),
-            compositeBlobInfo.getTotalSize(), newKeys);
+        ByteBuffer metadataContent = MetadataContentSerDe.serializeMetadataContent(compositeBlobInfoBuilder.build());
         blobPropertiesSize = compositeBlobInfo.getTotalSize();
         metadataContent.flip();
         blobDataBytes = new ByteBufferInputStream(metadataContent);
