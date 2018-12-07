@@ -31,6 +31,7 @@ import com.github.ambry.config.VerifiableProperties;
 import com.github.ambry.messageformat.BlobProperties;
 import com.github.ambry.network.NetworkClient;
 import com.github.ambry.network.NetworkClientErrorCode;
+import com.github.ambry.network.NioNetworkClient;
 import com.github.ambry.network.RequestInfo;
 import com.github.ambry.network.ResponseInfo;
 import com.github.ambry.notification.NotificationSystem;
@@ -940,7 +941,7 @@ public class NonBlockingRouterTest {
    * Test that failure detector is correctly notified for all responses regardless of the order in which successful
    * and failed responses arrive.
    * @param opHelper the {@link OperationHelper}
-   * @param networkClient the {@link NetworkClient}
+   * @param networkClient the {@link NioNetworkClient}
    * @param failedReplicaIds the list that will contain all the replicas for which failure was notified.
    * @param blobId the id of the blob to get/delete. For puts, this will be null.
    * @param successfulResponseCount the AtomicInteger that will contain the count of replicas for which success was
@@ -1046,7 +1047,7 @@ public class NonBlockingRouterTest {
   /**
    * Test that operations succeed even in the presence of responses that are corrupt and fail to deserialize.
    * @param opHelper the {@link OperationHelper}
-   * @param networkClient the {@link NetworkClient}
+   * @param networkClient the {@link NioNetworkClient}
    * @param blobId the id of the blob to get/delete. For puts, this will be null.
    * @throws Exception
    */

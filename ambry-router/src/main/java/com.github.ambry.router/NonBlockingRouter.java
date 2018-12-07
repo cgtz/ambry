@@ -22,6 +22,7 @@ import com.github.ambry.messageformat.BlobInfo;
 import com.github.ambry.messageformat.BlobProperties;
 import com.github.ambry.network.NetworkClient;
 import com.github.ambry.network.NetworkClientFactory;
+import com.github.ambry.network.NioNetworkClient;
 import com.github.ambry.network.RequestInfo;
 import com.github.ambry.network.ResponseInfo;
 import com.github.ambry.notification.NotificationSystem;
@@ -79,7 +80,7 @@ class NonBlockingRouter implements Router {
    * @param routerConfig the configs for the router.
    * @param routerMetrics the metrics for the router.
    * @param networkClientFactory the {@link NetworkClientFactory} used by the {@link OperationController} to create
-   *                             instances of {@link NetworkClient}.
+   *                             instances of {@link NioNetworkClient}.
    * @param notificationSystem the notification system to use to notify about blob creations and deletions.
    * @param clusterMap the cluster map for the cluster.
    * @param kms {@link KeyManagementService} to assist in fetching container keys for encryption or decryption
@@ -528,7 +529,7 @@ class NonBlockingRouter implements Router {
    * OperationControllers. A worker thread (the RequestResponseHandler thread) will poll The OperationController for
    * requests to be sent and will notify it on receiving responses. The OperationController in turn makes use of the
    * {@link PutManager}, {@link GetManager} and {@link DeleteManager} to perform puts, gets and deletes,
-   * respectively. A {@link NetworkClient} is used to interact with the network.
+   * respectively. A {@link NioNetworkClient} is used to interact with the network.
    */
   private class OperationController implements Runnable {
     final PutManager putManager;
@@ -796,7 +797,7 @@ class NonBlockingRouter implements Router {
     }
 
     /**
-     * Handle the response from polling the {@link NetworkClient}.
+     * Handle the response from polling the {@link NioNetworkClient}.
      * @param responseInfoList the list of {@link ResponseInfo} containing the responses.
      */
     protected void onResponse(List<ResponseInfo> responseInfoList) {
@@ -859,7 +860,7 @@ class NonBlockingRouter implements Router {
   /**
    * A special {@link OperationController} that is responsible for handling background operations for this router.
    *
-   * Background operations will be a scaling unit of its own (using its own {@link NetworkClient}), so that these
+   * Background operations will be a scaling unit of its own (using its own {@link NioNetworkClient}), so that these
    * operations do not interfere or contend with resources used for regular operations.
    *
    * Background operations include:

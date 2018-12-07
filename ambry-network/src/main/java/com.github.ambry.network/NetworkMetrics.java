@@ -139,18 +139,18 @@ public class NetworkMetrics {
     sslRenegotiationCount = registry.counter(MetricRegistry.name(Selector.class, "SslRenegotiationCount"));
 
     networkClientSendAndPollTime =
-        registry.histogram(MetricRegistry.name(NetworkClient.class, "NetworkClientSendAndPollTime"));
-    requestQueueTime = registry.histogram(MetricRegistry.name(NetworkClient.class, "RequestQueueTime"));
-    requestSendTime = registry.histogram(MetricRegistry.name(NetworkClient.class, "RequestSendTime"));
-    requestSendTotalTime = registry.histogram(MetricRegistry.name(NetworkClient.class, "RequestSendTotalTime"));
+        registry.histogram(MetricRegistry.name(NioNetworkClient.class, "NetworkClientSendAndPollTime"));
+    requestQueueTime = registry.histogram(MetricRegistry.name(NioNetworkClient.class, "RequestQueueTime"));
+    requestSendTime = registry.histogram(MetricRegistry.name(NioNetworkClient.class, "RequestSendTime"));
+    requestSendTotalTime = registry.histogram(MetricRegistry.name(NioNetworkClient.class, "RequestSendTotalTime"));
     requestResponseRoundTripTime =
-        registry.histogram(MetricRegistry.name(NetworkClient.class, "RequestResponseRoundTripTime"));
-    requestResponseTotalTime = registry.histogram(MetricRegistry.name(NetworkClient.class, "RequestResponseTotalTime"));
-    connectionTimeOutError = registry.counter(MetricRegistry.name(NetworkClient.class, "ConnectionTimeOutError"));
-    connectionNotAvailable = registry.counter(MetricRegistry.name(NetworkClient.class, "ConnectionNotAvailable"));
-    connectionReachLimit = registry.counter(MetricRegistry.name(NetworkClient.class, "ConnectionReachLimit"));
-    networkClientIOError = registry.counter(MetricRegistry.name(NetworkClient.class, "NetworkClientIOError"));
-    networkClientException = registry.counter(MetricRegistry.name(NetworkClient.class, "NetworkClientException"));
+        registry.histogram(MetricRegistry.name(NioNetworkClient.class, "RequestResponseRoundTripTime"));
+    requestResponseTotalTime = registry.histogram(MetricRegistry.name(NioNetworkClient.class, "RequestResponseTotalTime"));
+    connectionTimeOutError = registry.counter(MetricRegistry.name(NioNetworkClient.class, "ConnectionTimeOutError"));
+    connectionNotAvailable = registry.counter(MetricRegistry.name(NioNetworkClient.class, "ConnectionNotAvailable"));
+    connectionReachLimit = registry.counter(MetricRegistry.name(NioNetworkClient.class, "ConnectionReachLimit"));
+    networkClientIOError = registry.counter(MetricRegistry.name(NioNetworkClient.class, "NetworkClientIOError"));
+    networkClientException = registry.counter(MetricRegistry.name(NioNetworkClient.class, "NetworkClientException"));
 
     selectorActiveConnectionsList = new ArrayList<>();
     selectorUnreadyConnectionsList = new ArrayList<>();
@@ -192,7 +192,7 @@ public class NetworkMetrics {
         return pendingRequestsCount;
       }
     };
-    registry.register(MetricRegistry.name(NetworkClient.class, "NetworkClientPendingConnectionsCount"),
+    registry.register(MetricRegistry.name(NioNetworkClient.class, "NetworkClientPendingConnectionsCount"),
         networkClientPendingRequestsCount);
   }
 

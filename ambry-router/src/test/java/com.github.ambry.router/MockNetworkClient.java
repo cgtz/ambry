@@ -16,8 +16,8 @@ package com.github.ambry.router;
 import com.codahale.metrics.MetricRegistry;
 import com.github.ambry.clustermap.MockClusterMap;
 import com.github.ambry.config.NetworkConfig;
-import com.github.ambry.network.NetworkClient;
 import com.github.ambry.network.NetworkMetrics;
+import com.github.ambry.network.NioNetworkClient;
 import com.github.ambry.network.RequestInfo;
 import com.github.ambry.network.ResponseInfo;
 import com.github.ambry.network.Selector;
@@ -28,10 +28,10 @@ import java.util.List;
 
 
 /**
- * A mock class used for verifying whether certain methods of the {@link NetworkClient} gets called in certain
+ * A mock class used for verifying whether certain methods of the {@link NioNetworkClient} gets called in certain
  * tests and how many responses are received by the client.
  */
-class MockNetworkClient extends NetworkClient {
+class MockNetworkClient extends NioNetworkClient {
   boolean wokenUp = false;
   int responseCount = 0;
   int processedResponseCount = 0;

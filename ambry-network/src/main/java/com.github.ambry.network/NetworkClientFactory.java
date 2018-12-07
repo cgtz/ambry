@@ -20,7 +20,7 @@ import java.io.IOException;
 
 
 /**
- * A factory class used to get new instances of a {@link NetworkClient}
+ * A factory class used to get new instances of a {@link NioNetworkClient}
  */
 public class NetworkClientFactory {
   protected final NetworkMetrics networkMetrics;
@@ -52,13 +52,13 @@ public class NetworkClientFactory {
   }
 
   /**
-   * Construct and return a new {@link NetworkClient}
-   * @return return a new {@link NetworkClient}
+   * Construct and return a new {@link NioNetworkClient}
+   * @return return a new {@link NioNetworkClient}
    * @throws IOException if the {@link Selector} could not be instantiated.
    */
   public NetworkClient getNetworkClient() throws IOException {
     Selector selector = new Selector(networkMetrics, time, sslFactory);
-    return new NetworkClient(selector, networkConfig, networkMetrics, maxConnectionsPerPortPlainText,
+    return new NioNetworkClient(selector, networkConfig, networkMetrics, maxConnectionsPerPortPlainText,
         maxConnectionsPerPortSsl, connectionCheckoutTimeoutMs, time);
   }
 }

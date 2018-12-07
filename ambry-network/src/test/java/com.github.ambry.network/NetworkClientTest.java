@@ -37,7 +37,7 @@ import org.junit.Test;
 
 
 /**
- * Test the {@link NetworkClient}
+ * Test the {@link NioNetworkClient}
  */
 public class NetworkClientTest {
   private final int CHECKOUT_TIMEOUT_MS = 1000;
@@ -75,12 +75,12 @@ public class NetworkClientTest {
     selector = new MockSelector();
     time = new MockTime();
     networkClient =
-        new NetworkClient(selector, networkConfig, new NetworkMetrics(new MetricRegistry()), MAX_PORTS_PLAIN_TEXT,
+        new NioNetworkClient(selector, networkConfig, new NetworkMetrics(new MetricRegistry()), MAX_PORTS_PLAIN_TEXT,
             MAX_PORTS_SSL, CHECKOUT_TIMEOUT_MS, time);
   }
 
   /**
-   * Test {@link NetworkClient#warmUpConnections(List, int, long)}
+   * Test {@link NioNetworkClient#warmUpConnections(List, int, long)}
    */
   @Test
   public void testWarmUpConnections() throws IOException {
@@ -103,7 +103,7 @@ public class NetworkClientTest {
   }
 
   /**
-   * Test {@link NetworkClient#warmUpConnections(List, int, long)}
+   * Test {@link NioNetworkClient#warmUpConnections(List, int, long)}
    */
   @Test
   public void testWarmUpConnectionsSsl() throws IOException {
@@ -178,7 +178,7 @@ public class NetworkClientTest {
   }
 
   /**
-   * Tests a failure scenario where requests remain too long in the {@link NetworkClient}'s pending requests queue.
+   * Tests a failure scenario where requests remain too long in the {@link NioNetworkClient}'s pending requests queue.
    */
   @Test
   public void testConnectionUnavailable() throws IOException, InterruptedException {
@@ -419,7 +419,7 @@ public class NetworkClientTest {
   }
 
   /**
-   * Helper function to test {@link NetworkClient#warmUpConnections(List, int, long)}
+   * Helper function to test {@link NioNetworkClient#warmUpConnections(List, int, long)}
    */
   private void doTestWarmUpConnections(List<DataNodeId> localDataNodeIds, int maxPort, PortType expectedPortType) {
     Assert.assertEquals("Port type is not expected.", expectedPortType,

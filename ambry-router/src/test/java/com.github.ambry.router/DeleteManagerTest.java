@@ -22,6 +22,7 @@ import com.github.ambry.commons.LoggingNotificationSystem;
 import com.github.ambry.commons.ServerErrorCode;
 import com.github.ambry.config.RouterConfig;
 import com.github.ambry.config.VerifiableProperties;
+import com.github.ambry.network.NioNetworkClient;
 import com.github.ambry.router.RouterTestHelpers.*;
 import com.github.ambry.utils.MockTime;
 import com.github.ambry.utils.SystemTime;
@@ -403,7 +404,7 @@ public class DeleteManagerTest {
   }
 
   /**
-   * Test the case when the {@link com.github.ambry.network.Selector} of {@link com.github.ambry.network.NetworkClient}
+   * Test the case when the {@link com.github.ambry.network.Selector} of {@link NioNetworkClient}
    * experiences various exceptions. The order of received responses is the same as defined in {@code serverErrorCodes}.
    */
   @Test
