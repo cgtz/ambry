@@ -211,6 +211,10 @@ class HelixAccountService implements AccountService {
    */
   @Override
   public boolean updateAccounts(Collection<Account> accounts) {
+    return updateAccounts(accounts, false);
+  }
+
+  public boolean updateAccounts(Collection<Account> accounts, boolean allowDangerousUpdates) {
     checkOpen();
     Objects.requireNonNull(accounts, "accounts cannot be null");
     if (hasDuplicateAccountIdOrName(accounts)) {
@@ -225,11 +229,11 @@ class HelixAccountService implements AccountService {
     // update operation for all the accounts if any conflict exists. There is a slight chance that the account to update
     // conflicts with the accounts in the local cache, but does not conflict with those in the helixPropertyStore. This
     // will happen if some accounts are updated but the local cache is not refreshed.
-    if (hasConflictWithCache(accounts)) {
+    if (hasConflictingAccount(accounts, accountInfoMapRef.get(), allowDangerousUpdates)) {
       logger.debug("Accounts={} conflict with the accounts in local cache. Cancel the update operation.", accounts);
       accountServiceMetrics.updateAccountErrorCount.inc();
     } else {
-      ZkUpdater zkUpdater = new ZkUpdater(accounts);
+      ZkUpdater zkUpdater = new ZkUpdater(accounts, allowDangerousUpdates);
       hasSucceeded = helixStore.update(FULL_ACCOUNT_METADATA_PATH, zkUpdater, AccessOption.PERSISTENT);
       zkUpdater.maybePersistNewState(hasSucceeded);
     }
@@ -372,36 +376,51 @@ class HelixAccountService implements AccountService {
   }
 
   /**
-   * Checks a collection of {@link Account}s if there is any conflict between the {@link Account}s to update and the
-   * {@link Account}s in the local cache.
-   *
-   * @param accountsToSet The collection of {@link Account}s to check with the local cache.
-   * @return {@code true} if there is at least one {@link Account} in {@code accountsToSet} conflicts with the
-   *                      {@link Account}s in the cache, {@code false} otherwise.
-   */
-  private boolean hasConflictWithCache(Collection<Account> accountsToSet) {
-    return hasConflictingAccount(accountsToSet, accountInfoMapRef.get());
-  }
-
-  /**
-   * Checks if there is any {@link Account} in a given collection of {@link Account}s conflicts against any {@link Account}
-   * in a {@link AccountInfoMap}, according to the Javadoc of {@link AccountService}. Two {@link Account}s can be
-   * conflicting with each other if they have different account Ids but the same account name.
+   * Checks if there is any {@link Account} in a given collection that conflicts against any {@link Account} in an
+   * {@link AccountInfoMap}, according to the Javadoc of {@link AccountService}. Two accounts can be conflicting with
+   * each other if they have different account IDs but the same account name.
    *
    * @param accountsToSet The collection of {@link Account}s to check conflict.
    * @param accountInfoMap A {@link AccountInfoMap} that represents a group of {@link Account}s to check conflict.
+   * @param allowUnsafeUpdates {@code true} if unsafe account updates should be allowed. The following count as unsafe:
+   *                           changing the name of an existing account or container, removing a container from an
+   *                           account.
    * @return {@code true} if there is at least one {@link Account} in {@code accountPairs} conflicts with the existing
    *                      {@link Account}s in {@link AccountInfoMap}, {@code false} otherwise.
    */
-  private boolean hasConflictingAccount(Collection<Account> accountsToSet, AccountInfoMap accountInfoMap) {
+  private boolean hasConflictingAccount(Collection<Account> accountsToSet, AccountInfoMap accountInfoMap,
+      boolean allowUnsafeUpdates) {
     for (Account account : accountsToSet) {
       // if the account already exists, check that the snapshot version matches the expected value.
       Account accountInMap = accountInfoMap.getAccountById(account.getId());
-      if (accountInMap != null && account.getSnapshotVersion() != accountInMap.getSnapshotVersion()) {
-        logger.error(
-            "Account to update (accountId={} accountName={}) has an unexpected snapshot version in zk (expected={}, encountered={})",
-            account.getId(), account.getName(), account.getSnapshotVersion(), accountInMap.getSnapshotVersion());
-        return true;
+      if (accountInMap != null) {
+        if (account.getSnapshotVersion() != accountInMap.getSnapshotVersion()) {
+          logger.error(
+              "Account to update (accountId={} accountName={}) has an unexpected snapshot version in zk (expected={}, encountered={})",
+              account.getId(), account.getName(), account.getSnapshotVersion(), accountInMap.getSnapshotVersion());
+          return true;
+        }
+
+        if (!account.getName().equals(accountInMap.getName())) {
+          if (allowUnsafeUpdates) {
+            logger.warn("Changing account name for account {} from {} to {}", accountInMap.getId(), account.getName(),
+                account.getName());
+          } else {
+            logger.error("Cannot change account name for account {} from {} to {}", accountInMap.getId(),
+                account.getName(), account.getName());
+            return true;
+          }
+        }
+
+        for (Container containerInMap : accountInMap.getAllContainers()) {
+          Container containerInUpdate = account.getContainerById(containerInMap.getId());
+          if (containerInUpdate == null) {
+            return true;
+          }
+          if (!containerInUpdate.getName().equals(containerInMap.getName())) {
+            return true;
+          }
+        }
       }
       // check that there are no other accounts that conflict with the name of the account to update
       // (case D and E from the javadoc)
@@ -414,6 +433,19 @@ class HelixAccountService implements AccountService {
       }
     }
     return false;
+  }
+
+  private void checkForConflictingContainers(Account updatedAccount, Account currentAccount,
+      boolean allowUnsafeUpdates) {
+    for (Container containerInMap : currentAccount.getAllContainers()) {
+      Container updatedContainer = updatedAccount.getContainerById(containerInMap.getId());
+      if (updatedContainer == null) {
+        throw new IllegalArgumentException()
+      }
+      if (!updatedContainer.getName().equals(containerInMap.getName())) {
+        return true;
+      }
+    }
   }
 
   /**
@@ -542,15 +574,16 @@ class HelixAccountService implements AccountService {
    */
   private class ZkUpdater implements DataUpdater<ZNRecord> {
     private final Collection<Account> accountsToUpdate;
+    private final boolean allowDangerousUpdates;
     private Map<String, String> potentialNewState;
     private final Pair<String, Path> backupPrefixAndPath;
 
     /**
      * @param accountsToUpdate The {@link Account}s to update.
      */
-    ZkUpdater(Collection<Account> accountsToUpdate) {
+    ZkUpdater(Collection<Account> accountsToUpdate, boolean allowDangerousUpdates) {
       this.accountsToUpdate = accountsToUpdate;
-
+      this.allowDangerousUpdates = allowDangerousUpdates;
       Pair<String, Path> backupPrefixAndPath = null;
       if (backupDirPath != null) {
         try {
@@ -566,7 +599,7 @@ class HelixAccountService implements AccountService {
     public ZNRecord update(ZNRecord recordFromZk) {
       ZNRecord recordToUpdate;
       if (recordFromZk == null) {
-        logger.debug(
+        logger.info(
             "ZNRecord does not exist on path={} in HelixPropertyStore when updating accounts. Creating a new ZNRecord.",
             FULL_ACCOUNT_METADATA_PATH);
         recordToUpdate = new ZNRecord(ZN_RECORD_ID);
@@ -592,7 +625,7 @@ class HelixAccountService implements AccountService {
 
       // if there is any conflict with the existing record, fail the update. Exception thrown in this updater will
       // be caught by Helix and helixStore#update will return false.
-      if (hasConflictingAccount(accountsToUpdate, remoteAccountInfoMap)) {
+      if (hasConflictingAccount(accountsToUpdate, remoteAccountInfoMap, allowDangerousUpdates)) {
         // Throw exception, so that helixStore can capture and terminate the update operation
         throw new IllegalArgumentException(
             "Updating accounts failed because one account to update conflicts with existing accounts");
