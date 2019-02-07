@@ -86,7 +86,7 @@ import static com.github.ambry.utils.Utils.*;
  *   cannot exceed 1MB.
  * </p>
  */
-class HelixAccountService implements AccountService {
+class HelixAccountService extends BaseAccountService {
   static final String ACCOUNT_METADATA_CHANGE_TOPIC = "account_metadata_change_topic";
   static final String FULL_ACCOUNT_METADATA_CHANGE_MESSAGE = "full_account_metadata_change";
   static final String ACCOUNT_METADATA_MAP_KEY = "accountMetadata";
@@ -100,11 +100,8 @@ class HelixAccountService implements AccountService {
 
   private static final Logger logger = LoggerFactory.getLogger(HelixAccountService.class);
   private final HelixPropertyStore<ZNRecord> helixStore;
-  private final AccountServiceMetrics accountServiceMetrics;
   private final Notifier<String> notifier;
-  private final AtomicReference<AccountInfoMap> accountInfoMapRef = new AtomicReference<>(new AccountInfoMap());
   private final ReentrantLock lock = new ReentrantLock();
-  private final CopyOnWriteArraySet<Consumer<Collection<Account>>> accountUpdateConsumers = new CopyOnWriteArraySet<>();
   private final ScheduledExecutorService scheduler;
   private final HelixAccountServiceConfig config;
   private final Path backupDirPath;
@@ -133,8 +130,8 @@ class HelixAccountService implements AccountService {
   HelixAccountService(HelixPropertyStore<ZNRecord> helixStore, AccountServiceMetrics accountServiceMetrics,
       Notifier<String> notifier, ScheduledExecutorService scheduler, HelixAccountServiceConfig config)
       throws IOException {
+    super(accountServiceMetrics);
     this.helixStore = Objects.requireNonNull(helixStore, "helixStore cannot be null");
-    this.accountServiceMetrics = Objects.requireNonNull(accountServiceMetrics, "accountServiceMetrics cannot be null");
     this.notifier = notifier;
     this.scheduler = scheduler;
     this.config = config;
@@ -163,39 +160,6 @@ class HelixAccountService implements AccountService {
           "Background account updater will fetch accounts from remote starting {} ms from now and repeat with interval={} ms",
           initialDelay, config.updaterPollingIntervalMs);
     }
-  }
-
-  @Override
-  public Account getAccountByName(String accountName) {
-    checkOpen();
-    Objects.requireNonNull(accountName, "accountName cannot be null.");
-    return accountInfoMapRef.get().getAccountByName(accountName);
-  }
-
-  @Override
-  public Account getAccountById(short id) {
-    checkOpen();
-    return accountInfoMapRef.get().getAccountById(id);
-  }
-
-  @Override
-  public Collection<Account> getAllAccounts() {
-    checkOpen();
-    return accountInfoMapRef.get().getAccounts();
-  }
-
-  @Override
-  public boolean addAccountUpdateConsumer(Consumer<Collection<Account>> accountUpdateConsumer) {
-    checkOpen();
-    Objects.requireNonNull(accountUpdateConsumer, "accountUpdateConsumer to subscribe cannot be null");
-    return accountUpdateConsumers.add(accountUpdateConsumer);
-  }
-
-  @Override
-  public boolean removeAccountUpdateConsumer(Consumer<Collection<Account>> accountUpdateConsumer) {
-    checkOpen();
-    Objects.requireNonNull(accountUpdateConsumer, "accountUpdateConsumer to unsubscribe cannot be null");
-    return accountUpdateConsumers.remove(accountUpdateConsumer);
   }
 
   /**
@@ -264,6 +228,11 @@ class HelixAccountService implements AccountService {
       }
       helixStore.stop();
     }
+  }
+
+  @Override
+  protected boolean isOpen() {
+    return open.get();
   }
 
   /**
@@ -414,126 +383,6 @@ class HelixAccountService implements AccountService {
       }
     }
     return false;
-  }
-
-  /**
-   * Checks if the {@code HelixAccountService} is open.
-   */
-  private void checkOpen() {
-    if (!open.get()) {
-      throw new IllegalStateException("AccountService is closed.");
-    }
-  }
-
-  /**
-   * <p>
-   *   A helper class that represents a collection of {@link Account}s, where the ids and names of the
-   *   {@link Account}s are one-to-one mapped. An {@code AccountInfoMap} guarantees no duplicated account
-   *   id or name, nor conflict among the {@link Account}s within it.
-   * </p>
-   * <p>
-   *   Based on the properties, a {@code AccountInfoMap} internally builds index for {@link Account}s using both
-   *   {@link Account}'s id and name as key.
-   * </p>
-   */
-  private class AccountInfoMap {
-    private final Map<String, Account> nameToAccountMap;
-    private final Map<Short, Account> idToAccountMap;
-
-    /**
-     * Constructor for an empty {@code AccountInfoMap}.
-     */
-    private AccountInfoMap() {
-      nameToAccountMap = new HashMap<>();
-      idToAccountMap = new HashMap<>();
-    }
-
-    /**
-     * <p>
-     *   Constructs an {@code AccountInfoMap} from a group of {@link Account}s. The {@link Account}s exists
-     *   in the form of a string-to-string map, where the key is the string form of an {@link Account}'s id,
-     *   and the value is the string form of the {@link Account}'s JSON string.
-     * </p>
-     * <p>
-     *   The source {@link Account}s in the {@code accountMap} may duplicate account ids or names, or corrupted
-     *   JSON strings that cannot be parsed as valid {@link JSONObject}. In such cases, construction of
-     *   {@code AccountInfoMap} will fail.
-     * </p>
-     * @param accountMap A map of {@link Account}s in the form of (accountIdString, accountJSONString).
-     * @throws JSONException If parsing account data in json fails.
-     */
-    private AccountInfoMap(Map<String, String> accountMap) throws JSONException {
-      nameToAccountMap = new HashMap<>();
-      idToAccountMap = new HashMap<>();
-      for (Map.Entry<String, String> entry : accountMap.entrySet()) {
-        String idKey = entry.getKey();
-        String valueString = entry.getValue();
-        Account account;
-        JSONObject accountJson = new JSONObject(valueString);
-        if (idKey == null) {
-          accountServiceMetrics.remoteDataCorruptionErrorCount.inc();
-          throw new IllegalStateException(
-              "Invalid account record when reading accountMap in ZNRecord because idKey=null");
-        }
-        account = Account.fromJson(accountJson);
-        if (account.getId() != Short.valueOf(idKey)) {
-          accountServiceMetrics.remoteDataCorruptionErrorCount.inc();
-          throw new IllegalStateException(
-              "Invalid account record when reading accountMap in ZNRecord because idKey and accountId do not match. idKey="
-                  + idKey + " accountId=" + account.getId());
-        }
-        if (idToAccountMap.containsKey(account.getId()) || nameToAccountMap.containsKey(account.getName())) {
-          throw new IllegalStateException(
-              "Duplicate account id or name exists. id=" + account.getId() + " name=" + account.getName());
-        }
-        idToAccountMap.put(account.getId(), account);
-        nameToAccountMap.put(account.getName(), account);
-      }
-    }
-
-    /**
-     * Gets {@link Account} by its id.
-     * @param id The id to get the {@link Account}.
-     * @return The {@link Account} with the given id, or {@code null} if such an {@link Account} does not exist.
-     */
-    private Account getAccountById(Short id) {
-      return idToAccountMap.get(id);
-    }
-
-    /**
-     * Gets {@link Account} by its name.
-     * @param name The id to get the {@link Account}.
-     * @return The {@link Account} with the given name, or {@code null} if such an {@link Account} does not exist.
-     */
-    private Account getAccountByName(String name) {
-      return nameToAccountMap.get(name);
-    }
-
-    /**
-     * Checks if there is an {@link Account} with the given id.
-     * @param id The {@link Account} id to check.
-     * @return {@code true} if such an {@link Account} exists, {@code false} otherwise.
-     */
-    private boolean containsId(Short id) {
-      return idToAccountMap.containsKey(id);
-    }
-
-    /**
-     * Checks if there is an {@link Account} with the given name.
-     * @param name The {@link Account} name to check.
-     * @return {@code true} if such an {@link Account} exists, {@code false} otherwise.
-     */
-    private boolean containsName(String name) {
-      return nameToAccountMap.containsKey(name);
-    }
-
-    /**
-     * Gets all the {@link Account}s in this {@code AccountInfoMap} in a {@link Collection}.
-     * @return A {@link Collection} of all the {@link Account}s in this map.
-     */
-    private Collection<Account> getAccounts() {
-      return Collections.unmodifiableCollection(idToAccountMap.values());
-    }
   }
 
   /**
