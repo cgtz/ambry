@@ -435,17 +435,24 @@ class HelixAccountService implements AccountService {
     return false;
   }
 
-  private boolean hasConflictingContainers(Account updatedAccount, Account currentAccount, boolean allowUnsafeUpdates) {
+  private void checkForConflictingContainers(Account updatedAccount, Account currentAccount, boolean allowUnsafeUpdates)
+      throws IllegalArgumentException {
     for (Container currentContainer : currentAccount.getAllContainers()) {
       String errorMessage = null;
       Container updatedContainer = updatedAccount.getContainerById(currentContainer.getId());
       if (updatedContainer == null) {
+        errorMessage = "removing container " + currentContainer.getName() + " from account " + currentAccount.getName();
+      } else if (!updatedContainer.getName().equals(currentContainer.getName())) {
         errorMessage =
-            "Cannot remove container " + currentContainer.getName() + " from account " + currentAccount.getName();
-        return true;
+            "changing container name from " + currentContainer.getName() + " to " + updatedContainer.getName()
+                + " in account " + currentAccount.getId();
       }
-      if (!updatedContainer.getName().equals(currentContainer.getName())) {
-        errorMessage = "Changing "
+      if (errorMessage != null) {
+        if (allowUnsafeUpdates) {
+          logger.warn("Performing unsafe update: {}", errorMessage);
+        } else {
+          throw new IllegalArgumentException("Prohibited operation: " + errorMessage);
+        }
       }
     }
   }
