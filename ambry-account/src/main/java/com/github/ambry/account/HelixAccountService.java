@@ -16,6 +16,8 @@ package com.github.ambry.account;
 import com.github.ambry.commons.Notifier;
 import com.github.ambry.commons.TopicListener;
 import com.github.ambry.config.HelixAccountServiceConfig;
+import com.github.ambry.rest.RestServiceErrorCode;
+import com.github.ambry.rest.RestServiceException;
 import com.github.ambry.utils.Pair;
 import java.io.BufferedWriter;
 import java.io.IOException;
@@ -200,48 +202,49 @@ class HelixAccountService implements AccountService {
 
   /**
    * {@inheritDoc}
-   * <p>
-   *   This call is blocking until it completes the operation of updating account metadata to {@link HelixPropertyStore}.
-   * </p>
-   * <p>
-   *   There is a slight chance that an {@link Account} could be updated successfully, but its value was
-   *   set based on an outdated {@link Account}. This can be fixed after {@code generationId} is introduced
-   *   to {@link Account}.
-   * </p>
+   *
+   * This call is blocking until it completes the operation of updating account metadata to {@link HelixPropertyStore}.
    */
   @Override
   public boolean updateAccounts(Collection<Account> accounts) {
-    return updateAccounts(accounts, false);
-  }
-
-  public boolean updateAccounts(Collection<Account> accounts, boolean allowDangerousUpdates) {
-    checkOpen();
-    Objects.requireNonNull(accounts, "accounts cannot be null");
-    if (hasDuplicateAccountIdOrName(accounts)) {
-      logger.debug("Duplicate account id or name exist in the accounts to update");
-      accountServiceMetrics.updateAccountErrorCount.inc();
+    try {
+      updateAccounts(accounts, false);
+      return true;
+    } catch (RestServiceException e) {
+      logger.error("Failed updating accounts={}", accounts, e);
       return false;
     }
+  }
+
+  public void updateAccounts(Collection<Account> accounts, boolean allowDangerousUpdates) throws RestServiceException {
+    checkOpen();
+    Objects.requireNonNull(accounts, "accounts cannot be null");
     long startTimeMs = System.currentTimeMillis();
-    logger.trace("Start updating to HelixPropertyStore with accounts={}", accounts);
-    boolean hasSucceeded = false;
-    // make a pre check for conflict between the accounts to update and the accounts in the local cache. Will fail this
-    // update operation for all the accounts if any conflict exists. There is a slight chance that the account to update
-    // conflicts with the accounts in the local cache, but does not conflict with those in the helixPropertyStore. This
-    // will happen if some accounts are updated but the local cache is not refreshed.
-    if (hasConflictingAccount(accounts, accountInfoMapRef.get(), allowDangerousUpdates)) {
-      logger.debug("Accounts={} conflict with the accounts in local cache. Cancel the update operation.", accounts);
-      accountServiceMetrics.updateAccountErrorCount.inc();
-    } else {
-      ZkUpdater zkUpdater = new ZkUpdater(accounts, allowDangerousUpdates);
-      hasSucceeded = helixStore.update(FULL_ACCOUNT_METADATA_PATH, zkUpdater, AccessOption.PERSISTENT);
-      zkUpdater.maybePersistNewState(hasSucceeded);
-    }
-    long timeForUpdate = System.currentTimeMillis() - startTimeMs;
-    if (hasSucceeded) {
+    try {
+      if (hasDuplicateAccountIdOrName(accounts)) {
+        accountServiceMetrics.updateAccountErrorCount.inc();
+        throw new RestServiceException("Duplicate account id or name exist in the accounts to update",
+            RestServiceErrorCode.BadRequest);
+      }
+      logger.trace("Start updating to HelixPropertyStore with accounts={}", accounts);
+      // make a pre check for conflict between the accounts to update and the accounts in the local cache. Will fail this
+      // update operation for all the accounts if any conflict exists. There is a slight chance that the account to update
+      // conflicts with the accounts in the local cache, but does not conflict with those in the helixPropertyStore. This
+      // will happen if some accounts are updated but the local cache is not refreshed.
+      if (checkForConflictingAccounts(accounts, accountInfoMapRef.get(), allowDangerousUpdates)) {
+        logger.debug("Accounts={} conflict with the accounts in local cache. Cancel the update operation.", accounts);
+        accountServiceMetrics.updateAccountErrorCount.inc();
+      } else {
+        ZkUpdater zkUpdater = new ZkUpdater(accounts, allowDangerousUpdates);
+        boolean hasSucceeded = helixStore.update(FULL_ACCOUNT_METADATA_PATH, zkUpdater, AccessOption.PERSISTENT);
+        zkUpdater.maybePersistNewState(hasSucceeded);
+        if (!hasSucceeded) {
+
+        }
+      }
       logger.trace("Completed updating accounts, took time={} ms", timeForUpdate);
       accountServiceMetrics.updateAccountTimeInMs.update(timeForUpdate);
-      // notify account changes after successfully update.
+      // send account change notification after successfully update.
       if (notifier == null) {
         logger.warn("Notifier is not provided. Cannot notify other entities interested in account data change.");
       } else if (notifier.publish(ACCOUNT_METADATA_CHANGE_TOPIC, FULL_ACCOUNT_METADATA_CHANGE_MESSAGE)) {
@@ -250,11 +253,12 @@ class HelixAccountService implements AccountService {
         logger.error("Failed to send notification for account metadata change");
         accountServiceMetrics.notifyAccountDataChangeErrorCount.inc();
       }
-    } else {
-      logger.error("Failed updating accounts={}, took {} ms", accounts, timeForUpdate);
+    } catch (RestServiceException e) {
       accountServiceMetrics.updateAccountErrorCount.inc();
+      throw e;
+    } finally {
+      long timeForUpdate = System.currentTimeMillis() - startTimeMs;
     }
-    return hasSucceeded;
   }
 
   @Override
@@ -388,39 +392,31 @@ class HelixAccountService implements AccountService {
    * @return {@code true} if there is at least one {@link Account} in {@code accountPairs} conflicts with the existing
    *                      {@link Account}s in {@link AccountInfoMap}, {@code false} otherwise.
    */
-  private boolean hasConflictingAccount(Collection<Account> accountsToSet, AccountInfoMap accountInfoMap,
+  private boolean checkForConflictingAccounts(Collection<Account> accountsToSet, AccountInfoMap accountInfoMap,
       boolean allowUnsafeUpdates) {
     for (Account account : accountsToSet) {
       // if the account already exists, check that the snapshot version matches the expected value.
-      Account accountInMap = accountInfoMap.getAccountById(account.getId());
-      if (accountInMap != null) {
-        if (account.getSnapshotVersion() != accountInMap.getSnapshotVersion()) {
+      Account currentAccount = accountInfoMap.getAccountById(account.getId());
+      if (currentAccount != null) {
+        if (account.getSnapshotVersion() != currentAccount.getSnapshotVersion()) {
           logger.error(
               "Account to update (accountId={} accountName={}) has an unexpected snapshot version in zk (expected={}, encountered={})",
-              account.getId(), account.getName(), account.getSnapshotVersion(), accountInMap.getSnapshotVersion());
+              account.getId(), account.getName(), account.getSnapshotVersion(), currentAccount.getSnapshotVersion());
           return true;
         }
 
-        if (!account.getName().equals(accountInMap.getName())) {
+        if (!account.getName().equals(currentAccount.getName())) {
           if (allowUnsafeUpdates) {
-            logger.warn("Changing account name for account {} from {} to {}", accountInMap.getId(), account.getName(),
+            logger.warn("Changing account name for account {} from {} to {}", currentAccount.getId(), account.getName(),
                 account.getName());
           } else {
-            logger.error("Cannot change account name for account {} from {} to {}", accountInMap.getId(),
+            logger.error("Cannot change account name for account {} from {} to {}", currentAccount.getId(),
                 account.getName(), account.getName());
             return true;
           }
         }
 
-        for (Container containerInMap : accountInMap.getAllContainers()) {
-          Container containerInUpdate = account.getContainerById(containerInMap.getId());
-          if (containerInUpdate == null) {
-            return true;
-          }
-          if (!containerInUpdate.getName().equals(containerInMap.getName())) {
-            return true;
-          }
-        }
+        checkForConflictingContainers(account, currentAccount, allowUnsafeUpdates);
       }
       // check that there are no other accounts that conflict with the name of the account to update
       // (case D and E from the javadoc)
@@ -584,8 +580,9 @@ class HelixAccountService implements AccountService {
   private class ZkUpdater implements DataUpdater<ZNRecord> {
     private final Collection<Account> accountsToUpdate;
     private final boolean allowDangerousUpdates;
-    private Map<String, String> potentialNewState;
     private final Pair<String, Path> backupPrefixAndPath;
+    private Map<String, String> potentialNewState;
+    private RestServiceException updateException;
 
     /**
      * @param accountsToUpdate The {@link Account}s to update.
@@ -606,6 +603,22 @@ class HelixAccountService implements AccountService {
 
     @Override
     public ZNRecord update(ZNRecord recordFromZk) {
+      try {
+        return updateOrThrow(recordFromZk);
+      } catch (RestServiceException e) {
+        updateException = e;
+        throw new IllegalStateException("Cancelling update because of update logic exception.", e);
+      }
+    }
+
+    /**
+     * Helper method to make it easier to record exceptions thrown by the update logic.
+     * @param recordFromZk the current record.
+     * @return the new record.
+     * @throws RestServiceException if an update error occurs (e.g. snapshotVersion mismatch, prohibited change,
+     *                              remote data corruption).
+     */
+    private ZNRecord updateOrThrow(ZNRecord recordFromZk) throws RestServiceException {
       ZNRecord recordToUpdate;
       if (recordFromZk == null) {
         logger.info(
@@ -625,16 +638,15 @@ class HelixAccountService implements AccountService {
       try {
         remoteAccountInfoMap = new AccountInfoMap(accountMap);
       } catch (JSONException e) {
-        // Do not depend on Helix to log, so log the error message here.
-        logger.error("Exception occurred when building AccountInfoMap from accountMap={}", accountMap, e);
         accountServiceMetrics.remoteDataCorruptionErrorCount.inc();
-        throw new IllegalStateException("Exception occurred when building AccountInfoMap from accountMap", e);
+        throw new RestServiceException("Exception occurred when building AccountInfoMap from accountMap", e,
+            RestServiceErrorCode.InternalServerError);
       }
       maybePersistOldState(accountMap);
 
       // if there is any conflict with the existing record, fail the update. Exception thrown in this updater will
       // be caught by Helix and helixStore#update will return false.
-      if (hasConflictingAccount(accountsToUpdate, remoteAccountInfoMap, allowDangerousUpdates)) {
+      if (checkForConflictingAccounts(accountsToUpdate, remoteAccountInfoMap, allowDangerousUpdates)) {
         // Throw exception, so that helixStore can capture and terminate the update operation
         throw new IllegalArgumentException(
             "Updating accounts failed because one account to update conflicts with existing accounts");
@@ -654,6 +666,16 @@ class HelixAccountService implements AccountService {
         potentialNewState = accountMap;
         return recordToUpdate;
       }
+    }
+
+    /**
+     * If an exception was thrown in the body of {@link #update(ZNRecord)}, this will return that exception. This allows
+     * for error information to be propagated to the user. This does not include errors due to zookeeper connectivity,
+     * which would be indicated by the return value of {@link HelixPropertyStore#update}.
+     * @return the {@link RestServiceException}, or {@code null} if the update logic did not fail.
+     */
+    RestServiceException getUpdateException() {
+      return updateException;
     }
 
     /**
