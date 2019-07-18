@@ -29,6 +29,7 @@ import com.github.ambry.commons.BlobId;
 import com.github.ambry.commons.CommonTestUtils;
 import com.github.ambry.commons.ErrorMapping;
 import com.github.ambry.commons.ServerMetrics;
+import com.github.ambry.config.NetworkConfig;
 import com.github.ambry.config.ReplicationConfig;
 import com.github.ambry.config.ServerConfig;
 import com.github.ambry.config.StatsManagerConfig;
@@ -1358,7 +1359,7 @@ public class AmbryServerRequestsTest {
     Send lastResponse = null;
 
     MockRequestResponseChannel() {
-      super(1, 1);
+      super(new NetworkConfig(new VerifiableProperties(new Properties())));
     }
 
     @Override

@@ -73,13 +73,13 @@ public class SocketServer implements NetworkServer {
     this.sendBufferSize = config.socketSendBufferBytes;
     this.recvBufferSize = config.socketReceiveBufferBytes;
     this.maxRequestSize = config.socketRequestMaxBytes;
-    processors = new ArrayList<Processor>(numProcessorThreads);
-    requestResponseChannel = new SocketRequestResponseChannel(numProcessorThreads, maxQueuedRequests);
+    processors = new ArrayList<>(numProcessorThreads);
+    requestResponseChannel = new SocketRequestResponseChannel(config);
     metrics = new ServerNetworkMetrics(requestResponseChannel, registry, processors);
-    this.acceptors = new ArrayList<Acceptor>();
-    this.ports = new HashMap<PortType, Port>();
-    this.validatePorts(portList);
-    this.initializeSSLFactory(sslConfig);
+    acceptors = new ArrayList<>();
+    ports = new HashMap<>();
+    validatePorts(portList);
+    initializeSSLFactory(sslConfig);
   }
 
   public String getHost() {
@@ -154,12 +154,7 @@ public class SocketServer implements NetworkServer {
       Utils.newThread("ambry-processor-" + port + " " + i, processors.get(i), false).start();
     }
 
-    requestResponseChannel.addResponseListener(new ResponseListener() {
-      @Override
-      public void onResponse(int processorId) {
-        processors.get(processorId).wakeup();
-      }
-    });
+    requestResponseChannel.addResponseListener(processorId -> processors.get(processorId).wakeup());
 
     // start accepting connections
     logger.info("Starting acceptor threads on port {}", port);
@@ -512,7 +507,7 @@ class Processor extends AbstractServerThread {
     selector.wakeup();
   }
 
-  class SocketChannelPortTypePair {
+  private static class SocketChannelPortTypePair {
     private SocketChannel socketChannel;
     private PortType portType;
 

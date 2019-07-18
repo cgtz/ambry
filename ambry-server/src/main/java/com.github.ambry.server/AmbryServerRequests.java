@@ -63,8 +63,8 @@ import org.slf4j.LoggerFactory;
 
 
 /**
- * The main request implementation class. All requests to the server are
- * handled by this class
+ * The main request implementation class for server nodes (not VCRs). All requests to the server are
+ * handled by this class. This impl extends AmbryRequests and adds support for various storage admin operations.
  */
 public class AmbryServerRequests extends AmbryRequests {
   private final ServerConfig serverConfig;
@@ -98,39 +98,6 @@ public class AmbryServerRequests extends AmbryRequests {
       requestsDisableInfo.put(requestType, Collections.newSetFromMap(new ConcurrentHashMap<>()));
     }
     localPartitionToReplicaMap = createLocalPartitionToReplicaMap();
-  }
-
-  @Override
-  public void handleRequests(NetworkRequest request) throws InterruptedException {
-    try {
-      DataInputStream stream = new DataInputStream(request.getInputStream());
-      RequestOrResponseType type = RequestOrResponseType.values()[stream.readShort()];
-      switch (type) {
-        case PutRequest:
-          handlePutRequest(request);
-          break;
-        case GetRequest:
-          handleGetRequest(request);
-          break;
-        case DeleteRequest:
-          handleDeleteRequest(request);
-          break;
-        case ReplicaMetadataRequest:
-          handleReplicaMetadataRequest(request);
-          break;
-        case AdminRequest:
-          handleAdminRequest(request);
-          break;
-        case TtlUpdateRequest:
-          handleTtlUpdateRequest(request);
-          break;
-        default:
-          throw new UnsupportedOperationException("Request type not supported");
-      }
-    } catch (Exception e) {
-      logger.error("Error while handling request " + request + " closing connection", e);
-      requestResponseChannel.closeConnection(request);
-    }
   }
 
   /**

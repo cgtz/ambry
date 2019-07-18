@@ -35,5 +35,6 @@ public interface NetworkRequest {
   /**
    * Release any resource this request is holding.
    */
-  default void release() {};
+  default void release() {
+  }
 }

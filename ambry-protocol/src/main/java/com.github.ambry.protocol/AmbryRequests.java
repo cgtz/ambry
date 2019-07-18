@@ -145,6 +145,59 @@ public class AmbryRequests implements RequestAPI {
   }
 
   @Override
+  public void dropRequest(NetworkRequest request) throws InterruptedException {
+    try {
+      InputStream is = request.getInputStream();
+      DataInputStream dis = is instanceof DataInputStream ? (DataInputStream) is : new DataInputStream(is);
+      RequestOrResponseType type = RequestOrResponseType.values()[dis.readShort()];
+      Response response;
+      switch (type) {
+        case PutRequest:
+          PutRequest receivedRequest = PutRequest.readFrom(dis, clusterMap);
+          response = new PutResponse(receivedRequest.getCorrelationId(), receivedRequest.getClientId(),
+              ServerErrorCode.Retry_After_Backoff);
+          break;
+        case GetRequest:
+          GetRequest getRequest = GetRequest.readFrom(dis, clusterMap);
+          response = new GetResponse(getRequest.getCorrelationId(), getRequest.getClientId(),
+              ServerErrorCode.Retry_After_Backoff);
+          break;
+        case DeleteRequest:
+          DeleteRequest deleteRequest = DeleteRequest.readFrom(dis, clusterMap);
+          response = new DeleteResponse(deleteRequest.getCorrelationId(), deleteRequest.getClientId(),
+              ServerErrorCode.Retry_After_Backoff);
+          break;
+        case TtlUpdateRequest:
+          TtlUpdateRequest ttlUpdateRequest = TtlUpdateRequest.readFrom(dis, clusterMap);
+          response = new TtlUpdateResponse(ttlUpdateRequest.getCorrelationId(), ttlUpdateRequest.getClientId(),
+              ServerErrorCode.Retry_After_Backoff);
+          break;
+        case ReplicaMetadataRequest:
+          ReplicaMetadataRequest replicaMetadataRequest =
+              ReplicaMetadataRequest.readFrom(dis, clusterMap, findTokenHelper);
+          response = new ReplicaMetadataResponse(replicaMetadataRequest.getCorrelationId(),
+              replicaMetadataRequest.getClientId(), ServerErrorCode.Retry_After_Backoff,
+              ReplicaMetadataResponse.getCompatibleResponseVersion(replicaMetadataRequest.getVersionId()));
+          break;
+        case AdminRequest:
+          AdminRequest adminRequest = AdminRequest.readFrom(dis, clusterMap);
+          response = new DeleteResponse(adminRequest.getCorrelationId(), adminRequest.getClientId(),
+              ServerErrorCode.Retry_After_Backoff);
+          break;
+        default:
+          throw new UnsupportedOperationException("Request type not supported");
+      }
+
+      requestResponseChannel.sendResponse(response, request,
+          new ServerNetworkResponseMetrics(metrics.updateBlobTtlResponseQueueTimeInMs, metrics.updateBlobTtlSendTimeInMs,
+              metrics.updateBlobTtlTotalTimeInMs, null, null, totalTimeSpent));
+    } catch (Exception e) {
+      logger.error("Error while handling request " + request + " closing connection", e);
+      requestResponseChannel.closeConnection(request);
+    }
+  }
+
+  @Override
   public void handlePutRequest(NetworkRequest request) throws IOException, InterruptedException {
     InputStream is = request.getInputStream();
     DataInputStream dis = is instanceof DataInputStream ? (DataInputStream) is : new DataInputStream(is);
@@ -641,9 +694,9 @@ public class AmbryRequests implements RequestAPI {
             metrics.replicaMetadataSendTimeInMs, metrics.replicaMetadataTotalTimeInMs, null, null, totalTimeSpent));
   }
 
-  private void sendPutResponse(RequestResponseChannel requestResponseChannel, PutResponse response, NetworkRequest request,
-      Histogram responseQueueTime, Histogram responseSendTime, Histogram requestTotalTime, long totalTimeSpent,
-      long blobSize, ServerMetrics metrics) throws InterruptedException {
+  private void sendPutResponse(RequestResponseChannel requestResponseChannel, PutResponse response,
+      NetworkRequest request, Histogram responseQueueTime, Histogram responseSendTime, Histogram requestTotalTime,
+      long totalTimeSpent, long blobSize, ServerMetrics metrics) throws InterruptedException {
     if (response.getError() == ServerErrorCode.No_Error) {
       metrics.markPutBlobRequestRateBySize(blobSize);
       if (blobSize <= ServerMetrics.smallBlob) {
@@ -666,9 +719,9 @@ public class AmbryRequests implements RequestAPI {
     }
   }
 
-  private void sendGetResponse(RequestResponseChannel requestResponseChannel, GetResponse response, NetworkRequest request,
-      Histogram responseQueueTime, Histogram responseSendTime, Histogram requestTotalTime, long totalTimeSpent,
-      long blobSize, MessageFormatFlags flags, ServerMetrics metrics) throws InterruptedException {
+  private void sendGetResponse(RequestResponseChannel requestResponseChannel, GetResponse response,
+      NetworkRequest request, Histogram responseQueueTime, Histogram responseSendTime, Histogram requestTotalTime,
+      long totalTimeSpent, long blobSize, MessageFormatFlags flags, ServerMetrics metrics) throws InterruptedException {
 
     if (blobSize <= ServerMetrics.smallBlob) {
       if (flags == MessageFormatFlags.Blob || flags == MessageFormatFlags.All) {

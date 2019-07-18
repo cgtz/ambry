@@ -13,11 +13,14 @@
  */
 package com.github.ambry.network;
 
+import com.github.ambry.config.NetworkConfig;
+import com.github.ambry.config.VerifiableProperties;
 import com.github.ambry.utils.ByteBufferInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.channels.WritableByteChannel;
+import java.util.Properties;
 import java.util.Random;
 import org.junit.Assert;
 import org.junit.Test;
@@ -55,33 +58,32 @@ public class SocketRequestResponseChannelTest {
   }
 
   @Test
-  public void testSocketRequestResponseChannelTest() {
-    try {
-      SocketRequestResponseChannel channel = new SocketRequestResponseChannel(2, 10);
-      Integer key = new Integer(5);
-      String connectionId = "test_connectionId";
-      ByteBuffer buffer = ByteBuffer.allocate(1000);
-      new Random().nextBytes(buffer.array());
-      SocketServerRequest request = new SocketServerRequest(0, connectionId, buffer, new ByteBufferInputStream(buffer));
-      channel.sendRequest(request);
-      request = (SocketServerRequest) channel.receiveRequest();
-      Assert.assertEquals(request.getProcessor(), 0);
-      Assert.assertEquals(request.getConnectionId(), connectionId);
-      InputStream stream = request.getInputStream();
-      for (int i = 0; i < 1000; i++) {
-        Assert.assertEquals((byte) stream.read(), buffer.array()[i]);
-      }
-      request.release();
-
-      ResponseListenerMock mock = new ResponseListenerMock();
-      channel.addResponseListener(mock);
-      MockSend mocksend = new MockSend();
-      channel.sendResponse(mocksend, request, null);
-      Assert.assertEquals(mock.call, 1);
-      SocketServerResponse response = (SocketServerResponse) channel.receiveResponse(0);
-      Assert.assertEquals(response.getProcessor(), 0);
-    } catch (Exception e) {
-      Assert.assertEquals(true, false);
+  public void testSocketRequestResponseChannelTest() throws Exception {
+    Properties properties = new Properties();
+    properties.put("num.io.threads", 2);
+    properties.put("queued.max.requests", 10);
+    SocketRequestResponseChannel channel =
+        new SocketRequestResponseChannel(new NetworkConfig(new VerifiableProperties(properties)));
+    String connectionId = "test_connectionId";
+    ByteBuffer buffer = ByteBuffer.allocate(1000);
+    new Random().nextBytes(buffer.array());
+    SocketServerRequest request = new SocketServerRequest(0, connectionId, buffer, new ByteBufferInputStream(buffer));
+    channel.sendRequest(request);
+    request = (SocketServerRequest) channel.receiveRequest();
+    Assert.assertEquals(request.getProcessor(), 0);
+    Assert.assertEquals(request.getConnectionId(), connectionId);
+    InputStream stream = request.getInputStream();
+    for (int i = 0; i < 1000; i++) {
+      Assert.assertEquals((byte) stream.read(), buffer.array()[i]);
     }
+    request.release();
+
+    ResponseListenerMock mock = new ResponseListenerMock();
+    channel.addResponseListener(mock);
+    MockSend mocksend = new MockSend();
+    channel.sendResponse(mocksend, request, null);
+    Assert.assertEquals(mock.call, 1);
+    SocketServerResponse response = (SocketServerResponse) channel.receiveResponse(0);
+    Assert.assertEquals(response.getProcessor(), 0);
   }
 }

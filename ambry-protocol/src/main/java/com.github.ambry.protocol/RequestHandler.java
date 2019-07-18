@@ -14,6 +14,7 @@
 package com.github.ambry.protocol;
 
 import com.github.ambry.network.NetworkRequest;
+import com.github.ambry.network.NetworkRequestBundle;
 import com.github.ambry.network.RequestResponseChannel;
 import com.github.ambry.server.EmptyRequest;
 import org.slf4j.Logger;
@@ -36,15 +37,19 @@ public class RequestHandler implements Runnable {
   }
 
   public void run() {
-    NetworkRequest req = null;
+    NetworkRequestBundle networkRequestBundle = null;
     while (true) {
       try {
-        req = requestChannel.receiveRequest();
-        if (req.equals(EmptyRequest.getInstance())) {
-          logger.debug("Request handler {} received shut down command", id);
-          return;
+        networkRequestBundle = requestChannel.receiveRequest();
+        networkRequestBundle.getRequestsToDrop().forEach(requests::dropRequest);
+        NetworkRequest req = networkRequestBundle.getRequestToServe();
+        if (req != null) {
+          if (req.equals(EmptyRequest.getInstance())) {
+            logger.debug("Request handler {} received shut down command", id);
+            return;
+          }
+          requests.handleRequests(req);
         }
-        requests.handleRequests(req);
         logger.trace("Request handler {} handling request {}", id, req);
       } catch (Throwable e) {
         // TODO add metric to track background threads
@@ -52,9 +57,12 @@ public class RequestHandler implements Runnable {
         // this is bad and we need to shutdown the app
         Runtime.getRuntime().halt(1);
       } finally {
-        if (req != null) {
-          req.release();
-          req = null;
+        if (networkRequestBundle != null) {
+          networkRequestBundle.getRequestsToDrop().forEach(NetworkRequest::release);
+          if (networkRequestBundle.getRequestToServe() != null) {
+            networkRequestBundle.getRequestToServe().release();
+          }
+          networkRequestBundle = null;
         }
       }
     }

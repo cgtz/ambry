@@ -13,6 +13,9 @@
  */
 package com.github.ambry.config;
 
+import com.github.ambry.network.RequestQueueType;
+
+
 /**
  * The configs for network layer
  */
@@ -48,6 +51,20 @@ public class NetworkConfig {
   @Config(QUEUED_MAX_REQUESTS)
   @Default("500")
   public final int queuedMaxRequests;
+
+  /**
+   * The type of queue to use to hold requests waiting to be processed.
+   */
+  @Config("request.queue.type")
+  @Default("BASIC_FIFO")
+  public final RequestQueueType requestQueueType;
+
+  /**
+   * The maximum time in milliseconds a request is allowed to spend in the queue waiting to be processed.
+   */
+  @Config("request.queue.timeout.ms")
+  @Default("Integer.MAX_VALUE")
+  public final int requestQueueTimeoutMs;
 
   /**
    * The port to listen and accept connections on
@@ -138,6 +155,10 @@ public class NetworkConfig {
     socketReceiveBufferBytes = verifiableProperties.getInt(SOCKET_RECEIVE_BUFFER_BYTES, 1 * 1024 * 1024);
     socketRequestMaxBytes =
         verifiableProperties.getIntInRange(SOCKET_REQUEST_MAX_BYTES, 100 * 1024 * 1024, 1, Integer.MAX_VALUE);
+    requestQueueType =
+        verifiableProperties.getEnum("request.queue.type", RequestQueueType.class, RequestQueueType.BASIC_FIFO);
+    requestQueueTimeoutMs =
+        verifiableProperties.getIntInRange("request.queue.timeout.ms", Integer.MAX_VALUE, 0, Integer.MAX_VALUE);
     networkClientEnableConnectionReplenishment =
         verifiableProperties.getBoolean(NETWORK_CLIENT_ENABLE_CONNECTION_REPLENISHMENT, false);
     networkClientMaxReplenishmentPerHostPerSecond =
