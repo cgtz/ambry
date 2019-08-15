@@ -234,10 +234,10 @@ public class SSLTransmission extends Transmission implements ReadableByteChannel
           }
         case NEED_UNWRAP:
           logger.trace(
-              "SSLHandshake NEED_UNWRAP channelId {}, appReadBuffer pos {}, netReadBuffer pos {}, netWriteBuffer pos {}",
+              "SSLHandshake NEED_UNWRAP START channelId {}, appReadBuffer pos {}, netReadBuffer pos {}, netWriteBuffer pos {}",
               getConnectionId(), appReadBuffer.position(), netReadBuffer.position(), netWriteBuffer.position());
           do {
-            handshakeResult = handshakeUnwrap(read);
+            handshakeResult = handshakeUnwrap(true);
             if (handshakeResult.getStatus() == Status.BUFFER_OVERFLOW) {
               handleUnwrapOverflow();
             }
@@ -248,9 +248,9 @@ public class SSLTransmission extends Transmission implements ReadableByteChannel
             throw new EOFException("SSL handshake status CLOSED during handshake UNWRAP");
           }
           logger.trace(
-              "SSLHandshake NEED_UNWRAP channelId {}, handshakeResult {}, appReadBuffer pos {}, netReadBuffer pos {}, netWriteBuffer pos {}",
+              "SSLHandshake NEED_UNWRAP END channelId {}, handshakeResult {}, appReadBuffer pos {}, netReadBuffer pos {}, netWriteBuffer pos {}",
               getConnectionId(), handshakeResult, appReadBuffer.position(), netReadBuffer.position(),
-              netWriteBuffer.position());
+              netWriteBuffer);
 
           //if handshakeStatus completed than fall-through to finished status.
           //after handshake is finished there is no data left to read/write in socketChannel.
@@ -259,6 +259,7 @@ public class SSLTransmission extends Transmission implements ReadableByteChannel
             if (handshakeStatus == HandshakeStatus.NEED_WRAP) {
               key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
             } else if (handshakeStatus == HandshakeStatus.NEED_UNWRAP) {
+              // TODO figure out why commenting out the next line makes handshake work with OpenSSL
               key.interestOps(key.interestOps() & ~SelectionKey.OP_WRITE);
             }
             break;

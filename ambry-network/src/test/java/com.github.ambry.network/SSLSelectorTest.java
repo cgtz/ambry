@@ -14,9 +14,12 @@
 package com.github.ambry.network;
 
 import com.codahale.metrics.MetricRegistry;
+import com.github.ambry.commons.JdkSslFactory;
 import com.github.ambry.commons.SSLFactory;
 import com.github.ambry.commons.TestSSLUtils;
 import com.github.ambry.config.SSLConfig;
+import com.github.ambry.config.VerifiableProperties;
+import com.github.ambry.rest.NettySslFactory;
 import com.github.ambry.utils.SystemTime;
 import com.github.ambry.utils.TestUtils;
 import com.github.ambry.utils.Time;
@@ -29,6 +32,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Properties;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.After;
@@ -54,18 +58,20 @@ public class SSLSelectorTest {
 
   @Parameterized.Parameters
   public static List<Object[]> data() {
-    return Arrays.asList(new Object[][]{{0}, {2}});
+    return Arrays.asList(new Object[][]{{0, JdkSslFactory.class}, {0, NettySslFactory.class}, {2, JdkSslFactory.class},
+        {2, NettySslFactory.class}});
   }
 
-  public SSLSelectorTest(int poolSize) throws Exception {
+  public SSLSelectorTest(int poolSize, Class<? extends SSLFactory> sslFactoryClass) throws Exception {
     this.poolSize = poolSize;
     trustStoreFile = File.createTempFile("truststore", ".jks");
     SSLConfig sslConfig =
         new SSLConfig(TestSSLUtils.createSslProps("DC1,DC2,DC3", SSLFactory.Mode.SERVER, trustStoreFile, "server"));
-    SSLConfig clientSSLConfig =
-        new SSLConfig(TestSSLUtils.createSslProps("DC1,DC2,DC3", SSLFactory.Mode.CLIENT, trustStoreFile, "client"));
+    Properties clientSslProps = new Properties();
+    TestSSLUtils.addSSLProperties(clientSslProps, "DC1,DC2,DC3", SSLFactory.Mode.CLIENT, trustStoreFile, "client");
+    clientSslProps.setProperty("ssl.factory", sslFactoryClass.getName());
     SSLFactory serverSSLFactory = SSLFactory.getNewInstance(sslConfig);
-    clientSSLFactory = SSLFactory.getNewInstance(clientSSLConfig);
+    clientSSLFactory = SSLFactory.getNewInstance(new SSLConfig(new VerifiableProperties(clientSslProps)));
     server = new EchoServer(serverSSLFactory, 18383);
     server.start();
     applicationBufferSize = clientSSLFactory.createSSLEngine("localhost", server.port, SSLFactory.Mode.CLIENT)
