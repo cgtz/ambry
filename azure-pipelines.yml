@@ -10,10 +10,28 @@ pool:
   vmImage: 'ubuntu-latest'
 
 steps:
-- script: echo Hello, world!
-  displayName: 'Run a one-line script'
-
-- script: |
-    echo Add other tasks to build, test, and deploy your project.
-    echo See https://aka.ms/yaml
-  displayName: 'Run a multi-line script'
+- task: Gradle@2
+  inputs:
+    gradleWrapperFile: 'gradlew'
+    options: '--scan --stacktrace'
+    tasks: 'build intTest'
+    publishJUnitResults: true
+    testResultsFiles: '**/TEST-*.xml' # Required when publishJUnitResults == True
+#    codeCoverageToolOption: 'jaCoCo' # Optional. Options: none, cobertura, jaCoCo
+    #codeCoverageClassFilesDirectories: 'build/classes/main/' # Required when codeCoverageToolOption == False
+    #codeCoverageClassFilter: # Optional. Comma-separated list of filters to include or exclude classes from collecting code coverage. For example: +:com.*,+:org.*,-:my.app*.*
+    #codeCoverageFailIfEmpty: false # Optional
+    javaHomeOption: 'JDKVersion' # Options: jDKVersion, path
+    jdkVersionOption: '1.8' # Optional. Options: default, 1.11, 1.10, 1.9, 1.8, 1.7, 1.6
+    #jdkDirectory: # Required when javaHomeOption == Path
+    jdkArchitectureOption: 'x64' # Optional. Options: x86, x64
+    #gradleOptions: '-Xmx1024m' # Optional
+    #sonarQubeRunAnalysis: false
+    #sqGradlePluginVersionChoice: 'specify' # Required when sonarQubeRunAnalysis == True# Options: specify, build
+    #sonarQubeGradlePluginVersion: '2.6.1' # Required when sonarQubeRunAnalysis == True && SqGradlePluginVersionChoice == Specify
+    #checkStyleRunAnalysis: false # Optional
+    #findBugsRunAnalysis: false # Optional
+    #pmdRunAnalysis: false # Optional
+  displayName: 'build, run tests, generate coverage report'
+- script: echo hi
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/master'))
