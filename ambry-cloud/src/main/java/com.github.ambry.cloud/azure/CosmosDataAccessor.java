@@ -83,7 +83,7 @@ public class CosmosDataAccessor {
    */
   public ResourceResponse<Document> upsertMetadata(CloudBlobMetadata blobMetadata) throws DocumentClientException {
     RequestOptions options = getRequestOptions(blobMetadata.getPartitionId());
-    return retryOperationWithThrottling(
+    return retryWithThrottling(
         () -> documentClient.upsertDocument(cosmosCollectionLink, blobMetadata, options, true),
         azureMetrics.documentCreateTime);
   }
@@ -98,7 +98,7 @@ public class CosmosDataAccessor {
     String docLink = getDocumentLink(blobMetadata.getId());
     RequestOptions options = getRequestOptions(blobMetadata.getPartitionId());
     options.setPartitionKey(new PartitionKey(blobMetadata.getPartitionId()));
-    return retryOperationWithThrottling(() -> documentClient.deleteDocument(docLink, options),
+    return retryWithThrottling(() -> documentClient.deleteDocument(docLink, options),
         azureMetrics.documentDeleteTime);
   }
 
@@ -111,7 +111,7 @@ public class CosmosDataAccessor {
   public ResourceResponse<Document> readMetadata(BlobId blobId) throws DocumentClientException {
     String docLink = getDocumentLink(blobId.getID());
     RequestOptions options = getRequestOptions(blobId.getPartition().toPathString());
-    return retryOperationWithThrottling(() -> documentClient.readDocument(docLink, options),
+    return retryWithThrottling(() -> documentClient.readDocument(docLink, options),
         azureMetrics.documentReadTime);
   }
 
@@ -124,7 +124,7 @@ public class CosmosDataAccessor {
    */
   public ResourceResponse<Document> replaceMetadata(BlobId blobId, Document doc) throws DocumentClientException {
     RequestOptions options = getRequestOptions(blobId.getPartition().toPathString());
-    return retryOperationWithThrottling(() -> documentClient.replaceDocument(doc, options),
+    return retryWithThrottling(() -> documentClient.replaceDocument(doc, options),
         azureMetrics.documentUpdateTime);
   }
 
@@ -143,7 +143,7 @@ public class CosmosDataAccessor {
     feedOptions.setPartitionKey(new PartitionKey(partitionPath));
     // TODO: consolidate error count here
     FeedResponse<Document> response =
-        retryQueryWithThrottling(() -> documentClient.queryDocuments(cosmosCollectionLink, querySpec, feedOptions),
+        retryWithThrottling(() -> documentClient.queryDocuments(cosmosCollectionLink, querySpec, feedOptions),
             timer);
     try {
       // Note: internal query iterator wraps DocumentClientException in IllegalStateException!
@@ -175,45 +175,19 @@ public class CosmosDataAccessor {
   /**
    * Run the supplied DocumentClient action. If CosmosDB returns status 429 (TOO_MANY_REQUESTS),
    * retry after the requested wait period, up to the configured retry limit.
-   * @param operation the DocumentClient resource operation to execute, wrapped in a {@link Callable}.
-   * @param timer the {@link Timer} to use to record execution time (excluding waiting).
-   * @return the {@link ResourceResponse} returned by the operation, if successful.
-   * @throws DocumentClientException if Cosmos returns a different error status, or if the retry limit is reached.
-   */
-  private ResourceResponse<Document> retryOperationWithThrottling(Callable<ResourceResponse<Document>> operation,
-      Timer timer) throws DocumentClientException {
-    return (ResourceResponse<Document>) retryWithThrottling(operation, timer);
-  }
-
-  /**
-   * Run the supplied DocumentClient query. If CosmosDB returns status 429 (TOO_MANY_REQUESTS),
-   * retry after the requested wait period, up to the configured retry limit.
-   * @param query the DocumentClient query to execute, wrapped in a {@link Callable}.
-   * @param timer the {@link Timer} to use to record execution time (excluding waiting).
-   * @return the {@link FeedResponse} returned by the query, if successful.
-   * @throws DocumentClientException if Cosmos returns a different error status, or if the retry limit is reached.
-   */
-  private FeedResponse<Document> retryQueryWithThrottling(Callable<FeedResponse<Document>> query, Timer timer)
-      throws DocumentClientException {
-    return (FeedResponse<Document>) retryWithThrottling(query, timer);
-  }
-
-  /**
-   * Run the supplied DocumentClient action. If CosmosDB returns status 429 (TOO_MANY_REQUESTS),
-   * retry after the requested wait period, up to the configured retry limit.
    * @param action the DocumentClient action to execute, wrapped in a {@link Callable}.
    * @param timer the {@link Timer} to use to record execution time (excluding waiting).
    * @return the {@link Object} returned by the action, if successful.
    * @throws DocumentClientException if Cosmos returns a different error status, or if the retry limit is reached.
    */
-  private Object retryWithThrottling(Callable<? extends Object> action, Timer timer) throws DocumentClientException {
+  private <T> T retryWithThrottling(Callable<T> action, Timer timer) throws DocumentClientException {
     int count = 0;
     long waitTime = 0;
     do {
       try {
         waitForMs(waitTime);
         Timer.Context docTimer = timer.time();
-        Object response = executeCosmosAction(action);
+        T response = executeCosmosAction(action);
         docTimer.stop();
         return response;
       } catch (DocumentClientException dex) {
@@ -244,7 +218,7 @@ public class CosmosDataAccessor {
    * @return the result of the action.
    * @throws Exception
    */
-  private Object executeCosmosAction(Callable<? extends Object> action) throws Exception {
+  private <T> T executeCosmosAction(Callable<T> action) throws Exception {
     try {
       return action.call();
     } catch (DocumentClientException dex) {

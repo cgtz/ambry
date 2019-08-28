@@ -376,6 +376,7 @@ project(':ambry-cloud') {
         compile "com.codahale.metrics:metrics-core:$metricsVersion"
         compile "com.microsoft.azure:azure-storage:$azureStorageVersion"
         compile "com.microsoft.azure:azure-documentdb:$azureDocumentDbVersion"
+        compile "com.microsoft.azure:azure-cosmosdb:2.6.0"
         testCompile project(':ambry-router')
         testCompile project(':ambry-api').sourceSets.test.output
         testCompile project(':ambry-utils').sourceSets.test.output
