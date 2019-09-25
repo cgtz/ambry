@@ -27,6 +27,7 @@ import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLParameters;
 import javax.net.ssl.TrustManagerFactory;
+import org.conscrypt.Conscrypt;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -88,7 +89,7 @@ public class JdkSslFactory implements SSLFactory {
     if (!sslConfig.sslContextProvider.isEmpty()) {
       sslContext = SSLContext.getInstance(sslConfig.sslContextProtocol, sslConfig.sslContextProvider);
     } else {
-      sslContext = SSLContext.getInstance(sslConfig.sslContextProtocol);
+      sslContext = SSLContext.getInstance(sslConfig.sslContextProtocol, Conscrypt.newProvider());
     }
 
     SecurityStore keystore =
