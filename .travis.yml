@@ -15,10 +15,14 @@ addons:
     packages:
       - oracle-java8-installer
       - oracle-java8-unlimited-jce-policy
+  sonarcloud:
+    organization: "cgtz"
+    token:
+      secure: "KukxNiHClZAAz+e5v5Jj2vlslAhfZPHCOdceKmkTOw29spVJFR3VVtPrm954w9mOScb3/hwA4uaPAML2bHXFwzxnZmkHGhKOswg4N8fwMhwihb8mAUGH7lT7nRPaN08YMnZh24Fax0VSxxFV2AJ3ydF6BmepJuW1IVc9ZxcaDBF28CXkMhpNoXbiOtB2y4lSNgHsORevI6t2iQVTAcGlzkm4yaAHY2vWzPF/1cq2zu/svNxTMO7lIdNeOoA2na/VjfF6M4h80sxhX+rE9pSCs0BYrCcCAflycO2BmcJZEP1x1nUDtudn9xxnJmQSjEeUjQegJjG7JYdZA3tW0aDp9nqkbAsvKe7+zaNqFL/DHMm5yaclvuStImyHCqZurJfXOif6QRlgd0eqicaHqp28eTZitNEfLFWWTDWQ4q8ANN+Mdn8Tvg8hTLsySh+JC2mh+Za4X8a4OpcRfr6cgw+YCq/net+Rk6eNqytS3Ba5RQ5OcAzZHUvOyBKO363lMg30be5sEumgxfUpTJ4hwyuzifwIdhoNhfCeWCpwWGWKGxx4LV+5LJ5B21M2HmDAA/oAqGCof3lRnN52PIt0KNIAJlTofsEpyu75g+4AGst3b2foHenF1IurSof3j8RfHUBzHwEZ8JFjkpq1aJoSV0z3b93K8B2egBPpNMo8NtXg3zs="
 branches:
   except: # don't build tags
     - /^v\d/
-install: skip # skips unnecessary ./gradlew assemble (https://docs.travis-ci.com/user/job-lifecycle/#skipping-the-installation-phase) 
+install: skip # skips unnecessary ./gradlew assemble (https://docs.travis-ci.com/user/job-lifecycle/#skipping-the-installation-phase)
 script:
   - ./travis-build.sh
 after_success:

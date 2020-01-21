@@ -16,6 +16,7 @@ buildscript {
     apply from: file('gradle/buildscript.gradle'), to: buildscript
 }
 
+apply plugin: "org.sonarqube"
 apply plugin: 'org.shipkit.shipkit-auto-version'
 println "Building version $version"
 
@@ -24,6 +25,14 @@ apply from: file('gradle/environment.gradle')
 apply from: file("gradle/dependency-versions.gradle")
 if (!project.hasProperty('disableShipkit')) {
     apply from: file("gradle/ci-release.gradle")
+}
+
+sonarqube {
+  properties {
+      property "sonar.projectKey", 'cgtz_ambry'
+      property 'sonar.core.codeCoveragePlugin', 'jacoco'
+      property 'sonar.coverage.jacoco.xmlReportPaths', "${buildDir}/reports/jacoco/report.xml"
+  }
 }
 
 allprojects {
@@ -127,6 +136,7 @@ subprojects {
     }
     allTest.dependsOn test
     allTest.dependsOn intTest
+
     javadoc {
         // TODO audit and fix our javadocs so that we don't need this setting
         // This is mainly for cases where param/throws tags don't have descriptions
