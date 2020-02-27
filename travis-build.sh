@@ -4,7 +4,7 @@
 set -e
 
 echo "Building and testing artifacts, and creating pom files"
-./gradlew -s --scan build intTest codeCoverageReport sonarqube publishToMavenLocal
+./gradlew -s --scan build intTest codeCoverageReport jacocoTestReport sonarqube publishToMavenLocal
 
 #echo "Pull request: [$TRAVIS_PULL_REQUEST], Travis branch: [$TRAVIS_BRANCH]"
 ## release only from master when no pull request build
