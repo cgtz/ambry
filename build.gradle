@@ -144,6 +144,12 @@ subprojects {
         options.addStringOption('Xdoclint:none', '-quiet') // Suppress lint warnings
         failOnError = false
     }
+
+    jacocoTestReport {
+        reports {
+            xml.enabled true
+        }
+    }
 }
 
 project(':ambry-utils') {
