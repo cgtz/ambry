@@ -14,6 +14,7 @@
 package com.github.ambry.store;
 
 import com.github.ambry.config.StoreConfig;
+import com.github.ambry.store.PersistentIndex.IndexEntryType;
 import com.github.ambry.utils.ByteBufferInputStream;
 import com.github.ambry.utils.CrcInputStream;
 import com.github.ambry.utils.CrcOutputStream;
@@ -37,6 +38,7 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.List;
 import java.util.ListIterator;
@@ -108,7 +110,7 @@ class IndexSegment {
   private short version;
   private Offset prevSafeEndPoint = null;
   // reset key refers to the first StoreKey that is added to the index segment
-  private Pair<StoreKey, PersistentIndex.IndexEntryType> resetKey = null;
+  private Pair<StoreKey, IndexEntryType> resetKey = null;
   private NavigableMap<StoreKey, ConcurrentSkipListSet<IndexValue>> index = null;
 
   /**
@@ -310,9 +312,9 @@ class IndexSegment {
 
   /**
    * @return the reset key for the index segment which is a {@link Pair} of StoreKey and
-   * {@link PersistentIndex.IndexEntryType}
+   * {@link IndexEntryType}
    */
-  Pair<StoreKey, PersistentIndex.IndexEntryType> getResetKey() {
+  Pair<StoreKey, IndexEntryType> getResetKey() {
     return resetKey;
   }
 
@@ -541,13 +543,13 @@ class IndexSegment {
         bloomFilter.add(getStoreKeyBytes(entry.getKey()));
       }
       if (resetKey == null) {
-        PersistentIndex.IndexEntryType type = PersistentIndex.IndexEntryType.PUT;
+        IndexEntryType type = IndexEntryType.PUT;
         if (entry.getValue().isDelete()) {
-          type = PersistentIndex.IndexEntryType.DELETE;
+          type = IndexEntryType.DELETE;
         } else if (entry.getValue().isUndelete()) {
-          type = PersistentIndex.IndexEntryType.UNDELETE;
+          type = IndexEntryType.UNDELETE;
         } else if (entry.getValue().isTtlUpdate()) {
-          type = PersistentIndex.IndexEntryType.TTL_UPDATE;
+          type = IndexEntryType.TTL_UPDATE;
         }
         resetKey = new Pair<>(entry.getKey(), type);
       }
@@ -848,7 +850,7 @@ class IndexSegment {
           lastModifiedTimeSec.set(serEntries.getLong());
           storeKey = factory.getStoreKey(new DataInputStream(new ByteBufferInputStream(serEntries)));
           resetKeyType = serEntries.getShort();
-          resetKey = new Pair<>(storeKey, PersistentIndex.IndexEntryType.values()[resetKeyType]);
+          resetKey = new Pair<>(storeKey, IndexEntryType.values()[resetKeyType]);
           indexSizeExcludingEntries = VERSION_FIELD_LENGTH + KEY_OR_ENTRY_SIZE_FIELD_LENGTH + VALUE_SIZE_FIELD_LENGTH
               + LOG_END_OFFSET_FIELD_LENGTH + CRC_FIELD_LENGTH + LAST_MODIFIED_TIME_FIELD_LENGTH + resetKey.getFirst()
               .sizeInBytes() + RESET_KEY_TYPE_FIELD_LENGTH;
@@ -862,7 +864,7 @@ class IndexSegment {
           lastModifiedTimeSec.set(serEntries.getLong());
           storeKey = factory.getStoreKey(new DataInputStream(new ByteBufferInputStream(serEntries)));
           resetKeyType = serEntries.getShort();
-          resetKey = new Pair<>(storeKey, PersistentIndex.IndexEntryType.values()[resetKeyType]);
+          resetKey = new Pair<>(storeKey, IndexEntryType.values()[resetKeyType]);
           indexSizeExcludingEntries = VERSION_FIELD_LENGTH + KEY_OR_ENTRY_SIZE_FIELD_LENGTH + VALUE_SIZE_FIELD_LENGTH
               + LOG_END_OFFSET_FIELD_LENGTH + CRC_FIELD_LENGTH + LAST_MODIFIED_TIME_FIELD_LENGTH + resetKey.getFirst()
               .sizeInBytes() + RESET_KEY_TYPE_FIELD_LENGTH;
@@ -923,7 +925,7 @@ class IndexSegment {
         lastModifiedTimeSec.set(stream.readLong());
         StoreKey storeKey = factory.getStoreKey(stream);
         short resetKeyType = stream.readShort();
-        resetKey = new Pair<>(storeKey, PersistentIndex.IndexEntryType.values()[resetKeyType]);
+        resetKey = new Pair<>(storeKey, IndexEntryType.values()[resetKeyType]);
         indexSizeExcludingEntries +=
             LAST_MODIFIED_TIME_FIELD_LENGTH + resetKey.getFirst().sizeInBytes() + RESET_KEY_TYPE_FIELD_LENGTH;
       }
@@ -957,9 +959,17 @@ class IndexSegment {
               && journal.getKeyAtOffset(new Offset(startOffset.getName(), oMsgOff)) == null) {
             // we add an entry for the original message offset if it is within the same index segment and
             // an entry is not already in the journal
-            journal.addEntry(new Offset(startOffset.getName(), blobValue.getOriginalMessageOffset()), key);
+            journal.addEntry(new Offset(startOffset.getName(), blobValue.getOriginalMessageOffset()), key,
+                EnumSet.of(IndexEntryType.PUT));
           }
-          journal.addEntry(blobValue.getOffset(), key);
+          EnumSet<IndexEntryType> types = blobValue.getIndexEntryTypes();
+          if (types.size() != 1) {
+            // Currently it is hard to tell if this is a possibility or not. To decouple the size limit fixes from this
+            // question, just emitting a metric but handling the multiple flag case.
+            logger.debug("IndexValue {} has more than one flag set: {}", blobValue, types);
+            metrics.multipleFlagsInIndexValueCount.inc();
+          }
+          journal.addEntry(blobValue.getOffset(), key, types);
           // sizeWritten is only used for in-memory segments, and for those the padding does not come into picture.
           sizeWritten.addAndGet(key.sizeInBytes() + valueSize);
           numberOfItems.incrementAndGet();
@@ -970,8 +980,7 @@ class IndexSegment {
           logger.info(
               "IndexSegment : {} ignoring index entry outside the log end offset that was not synced logEndOffset "
                   + "{} key {} entryOffset {} entrySize {} entryDeleteState {}", indexFile.getAbsolutePath(),
-              logEndOffset, key, blobValue.getOffset(), blobValue.getSize(),
-              blobValue.isDelete());
+              logEndOffset, key, blobValue.getOffset(), blobValue.getSize(), blobValue.isDelete());
         }
       }
       endOffset.set(new Offset(startOffset.getName(), maxEndOffset));

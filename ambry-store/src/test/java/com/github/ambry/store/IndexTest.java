@@ -733,7 +733,8 @@ public class IndexTest {
     }
 
     // add an entry into the journal for the very first offset in the index
-    state.index.journal.addEntry(state.logOrder.firstKey(), state.logOrder.firstEntry().getValue().getFirst());
+    state.index.journal.addEntry(state.logOrder.firstKey(), state.logOrder.firstEntry().getValue().getFirst(),
+        state.logOrder.firstEntry().getValue().getSecond().indexValue.getIndexEntryTypes());
     // remove the first index segment
     IndexSegment firstSegment = state.index.getIndexSegments().remove(state.index.getIndexSegments().firstKey());
     // try to add it back and it should result in an error
@@ -2398,8 +2399,9 @@ public class IndexTest {
     while (logEntry != null) {
       Offset startOffset = logEntry.getKey();
       MockId id = logEntry.getValue().getFirst();
+      EnumSet<PersistentIndex.IndexEntryType> types = logEntry.getValue().getSecond().indexValue.getIndexEntryTypes();
       // size returned is the size of the most recent record
-      long size = state.getExpectedValue(id, EnumSet.allOf(PersistentIndex.IndexEntryType.class), null).getSize();
+      long size = state.getExpectedValue(id, types, null).getSize();
       StoreFindToken expectedEndToken = new StoreFindToken(startOffset, state.sessionId, state.incarnationId, false);
       Offset endOffset = state.log.getFileSpanForMessage(startOffset, size).getEndOffset();
       expectedEndToken.setBytesRead(state.index.getAbsolutePositionInLogForOffset(endOffset));
@@ -2488,10 +2490,10 @@ public class IndexTest {
       // the one that is returned.
       if (undeleteValue != null || deleteValue != null) {
         // there is either delete or undelete
-        IndexValue lastValue = state.getExpectedValue(id,
-            EnumSet.of(PersistentIndex.IndexEntryType.DELETE, PersistentIndex.IndexEntryType.UNDELETE), null);
-        assertEquals("Inconsistent delete state for key " + id, lastValue.isDelete(), info.isDeleted());
-        assertEquals("Inconsistent undelete state for key " + id, lastValue.isUndelete(), info.isUndeleted());
+//        IndexValue lastValue = state.getExpectedValue(id,
+//            EnumSet.of(PersistentIndex.IndexEntryType.DELETE, PersistentIndex.IndexEntryType.UNDELETE), null);
+//        assertEquals("Inconsistent delete state for key " + id, lastValue.isDelete(), info.isDeleted());
+//        assertEquals("Inconsistent undelete state for key " + id, lastValue.isUndelete(), info.isUndeleted());
       }
       assertEquals("Inconsistent TTL update state", isTtlUpdated, info.isTtlUpdated());
       assertEquals("Inconsistent expiresAtMs", expiresAtMs, info.getExpirationTimeInMs());

@@ -76,6 +76,7 @@ public class StoreMetrics {
   public final Counter keyInFindEntriesAbsent;
   public final Counter duplicateKeysInBatch;
   public final Counter storeIoErrorTriggeredShutdownCount;
+  public final Counter multipleFlagsInIndexValueCount;
 
   // Compaction related metrics
   public final Counter compactionFixStateCount;
@@ -114,8 +115,7 @@ public class StoreMetrics {
         registry.timer(MetricRegistry.name(BlobStore.class, name + "StoreFindEntriesSinceResponse"));
     findMissingKeysResponse =
         registry.timer(MetricRegistry.name(BlobStore.class, name + "StoreFindMissingKeyResponse"));
-    findKeyResponse =
-        registry.timer(MetricRegistry.name(BlobStore.class, name + "StoreFindKeyResponse"));
+    findKeyResponse = registry.timer(MetricRegistry.name(BlobStore.class, name + "StoreFindKeyResponse"));
     isKeyDeletedResponse = registry.timer(MetricRegistry.name(BlobStore.class, name + "IsKeyDeletedResponse"));
     storeStartTime = registry.timer(MetricRegistry.name(BlobStore.class, name + "StoreStartTime"));
     storeShutdownTimeInMs = registry.histogram(MetricRegistry.name(BlobStore.class, name + "StoreShutdownTimeInMs"));
@@ -172,6 +172,8 @@ public class StoreMetrics {
     duplicateKeysInBatch = registry.counter(MetricRegistry.name(BlobStore.class, name + "DuplicateKeysInBatch"));
     storeIoErrorTriggeredShutdownCount =
         registry.counter(MetricRegistry.name(BlobStore.class, name + "StoreIoErrorTriggeredShutdownCount"));
+    multipleFlagsInIndexValueCount =
+        registry.counter(MetricRegistry.name(PersistentIndex.class, name + "MultipleFlagsInIndexValueCount"));
     compactionFixStateCount = registry.counter(MetricRegistry.name(BlobStoreCompactor.class, name + "FixStateCount"));
     compactionCopyRateInBytes = registry.meter(MetricRegistry.name(BlobStoreCompactor.class, name + "CopyRateInBytes"));
     compactionBytesReclaimedCount =

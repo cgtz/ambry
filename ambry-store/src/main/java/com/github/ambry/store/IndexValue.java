@@ -16,6 +16,7 @@ package com.github.ambry.store;
 import com.github.ambry.utils.Time;
 import com.github.ambry.utils.Utils;
 import java.nio.ByteBuffer;
+import java.util.EnumSet;
 import java.util.concurrent.TimeUnit;
 
 import static com.github.ambry.account.Account.*;
@@ -158,7 +159,7 @@ class IndexValue implements Comparable<IndexValue> {
 
   /**
    * Constructs IndexValue based on the args passed
-   * @param size the size of the blob that this index value refers to
+   * @param size the size of the log record (e.g. put record, delete record) that this index value refers to
    * @param offset the {@link Offset} in the {@link Log} where the blob that this index value refers to resides
    * @param expiresAtMs the expiration time in ms at which the blob expires
    * @param operationTimeInMs operation time in ms of the entry
@@ -172,7 +173,7 @@ class IndexValue implements Comparable<IndexValue> {
 
   /**
    * Constructs IndexValue based on the args passed
-   * @param size the size of the blob that this index value refers to
+   * @param size the size of the log record (e.g. put record, delete record) that this index value refers to
    * @param offset the {@link Offset} in the {@link Log} where the blob that this index value refers to resides
    * @param flags the {@link Flags} that needs to be set for the Index Value
    * @param expiresAtMs the expiration time in ms at which the blob expires
@@ -197,7 +198,7 @@ class IndexValue implements Comparable<IndexValue> {
 
   /**
    * Constructs IndexValue based on the args passed
-   * @param size the size of the blob that this index value refers to
+   * @param size the size of the log record (e.g. put record, delete record) that this index value refers to
    * @param offset the {@link Offset} in the {@link Log} where the blob that this index value refers to resides
    * @param flags the flags that needs to be set for the Index Value
    * @param expiresAtMs the expiration time in ms at which the blob expires
@@ -223,7 +224,7 @@ class IndexValue implements Comparable<IndexValue> {
   }
 
   /**
-   * @return the size of the blob that this index value refers to
+   * @return the size of the log record (e.g. put record, delete record) that this index value refers to
    */
   long getSize() {
     return size;
@@ -282,6 +283,26 @@ class IndexValue implements Comparable<IndexValue> {
    */
   boolean isPut() {
     return flags == FLAGS_DEFAULT_VALUE;
+  }
+
+  /**
+   * @return the index entry types that this index value corresponds to.
+   */
+  EnumSet<PersistentIndex.IndexEntryType> getIndexEntryTypes() {
+    EnumSet<PersistentIndex.IndexEntryType> types = EnumSet.noneOf(PersistentIndex.IndexEntryType.class);
+    if (isTtlUpdate()) {
+      types.add(PersistentIndex.IndexEntryType.TTL_UPDATE);
+    }
+    if (isDelete()) {
+      types.add(PersistentIndex.IndexEntryType.DELETE);
+    }
+    if (isUndelete()) {
+      types.add(PersistentIndex.IndexEntryType.UNDELETE);
+    }
+    if (isPut()) {
+      types.add(PersistentIndex.IndexEntryType.PUT);
+    }
+    return types;
   }
 
   /**

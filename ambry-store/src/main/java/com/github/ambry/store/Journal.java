@@ -13,7 +13,9 @@
  */
 package com.github.ambry.store;
 
+import com.github.ambry.store.PersistentIndex.IndexEntryType;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
@@ -29,10 +31,12 @@ import org.slf4j.LoggerFactory;
 class JournalEntry {
   private final Offset offset;
   private final StoreKey key;
+  private final EnumSet<IndexEntryType> indexEntryTypes;
 
-  JournalEntry(Offset offset, StoreKey key) {
+  JournalEntry(Offset offset, StoreKey key, EnumSet<IndexEntryType> indexEntryTypes) {
     this.offset = offset;
     this.key = key;
+    this.indexEntryTypes = indexEntryTypes;
   }
 
   Offset getOffset() {
@@ -41,6 +45,13 @@ class JournalEntry {
 
   StoreKey getKey() {
     return key;
+  }
+
+  /**
+   * @return the {@link IndexEntryType}s that the entry with this log offset corresponds to.
+   */
+  EnumSet<IndexEntryType> getIndexEntryTypes() {
+    return indexEntryTypes;
   }
 
   @Override
@@ -66,7 +77,7 @@ class JournalEntry {
  */
 class Journal {
 
-  private final ConcurrentSkipListMap<Offset, StoreKey> journal;
+  private final ConcurrentSkipListMap<Offset, JournalEntry> journal;
   private final ConcurrentHashMap<StoreKey, Long> recentCrcs;
   private final int maxEntriesToJournal;
   private final int maxEntriesToReturn;
@@ -94,20 +105,21 @@ class Journal {
    * Adds an entry into the journal with the given {@link Offset}, {@link StoreKey}, and crc.
    * @param offset The {@link Offset} that the key pertains to.
    * @param key The key that the entry in the journal refers to.
+   * @param indexEntryTypes The type of entry at this log offset.
    * @param crc The crc of the object. This may be null if crc is not available.
    */
-  void addEntry(Offset offset, StoreKey key, Long crc) {
+  void addEntry(Offset offset, StoreKey key, EnumSet<IndexEntryType> indexEntryTypes, Long crc) {
     if (key == null || offset == null) {
       throw new IllegalArgumentException("Invalid arguments passed to add to the journal");
     }
     if (maxEntriesToJournal > 0) {
       if (!inBootstrapMode && currentNumberOfEntries.get() >= maxEntriesToJournal) {
-        Map.Entry<Offset, StoreKey> earliestEntry = journal.firstEntry();
+        Map.Entry<Offset, JournalEntry> earliestEntry = journal.firstEntry();
         journal.remove(earliestEntry.getKey());
-        recentCrcs.remove(earliestEntry.getValue());
+        recentCrcs.remove(earliestEntry.getValue().getKey());
         currentNumberOfEntries.decrementAndGet();
       }
-      journal.put(offset, key);
+      journal.put(offset, new JournalEntry(offset, key, indexEntryTypes));
       if (crc != null) {
         recentCrcs.put(key, crc);
       }
@@ -121,9 +133,10 @@ class Journal {
    * Adds an entry into the journal with the given {@link Offset}, {@link StoreKey}, and a null crc.
    * @param offset The {@link Offset} that the key pertains to.
    * @param key The key that the entry in the journal refers to.
+   * @param indexEntryTypes The type of entry at this log offset.
    */
-  void addEntry(Offset offset, StoreKey key) {
-    addEntry(offset, key, null);
+  void addEntry(Offset offset, StoreKey key, EnumSet<IndexEntryType> indexEntryTypes) {
+    addEntry(offset, key, indexEntryTypes, null);
   }
 
   /**
@@ -140,8 +153,8 @@ class Journal {
     // in the journal. If the offset is not present we return null, else we return the entries we got in the first step.
     // The offset may not be present in the journal as it could be removed.
 
-    Map.Entry<Offset, StoreKey> first = journal.firstEntry();
-    Map.Entry<Offset, StoreKey> last = journal.lastEntry();
+    Map.Entry<Offset, JournalEntry> first = journal.firstEntry();
+    Map.Entry<Offset, JournalEntry> last = journal.lastEntry();
 
     // check if the journal contains the offset.
     if (first == null || offset.compareTo(first.getKey()) < 0 || last == null || offset.compareTo(last.getKey()) > 0
@@ -149,13 +162,13 @@ class Journal {
       return null;
     }
 
-    ConcurrentNavigableMap<Offset, StoreKey> subsetMap = journal.tailMap(offset, true);
+    ConcurrentNavigableMap<Offset, JournalEntry> subsetMap = journal.tailMap(offset, true);
     int entriesToReturn = Math.min(subsetMap.size(), maxEntriesToReturn);
-    List<JournalEntry> journalEntries = new ArrayList<JournalEntry>(entriesToReturn);
+    List<JournalEntry> journalEntries = new ArrayList<>(entriesToReturn);
     int entriesAdded = 0;
-    for (Map.Entry<Offset, StoreKey> entry : subsetMap.entrySet()) {
+    for (Map.Entry<Offset, JournalEntry> entry : subsetMap.entrySet()) {
       if (inclusive || !entry.getKey().equals(offset)) {
-        journalEntries.add(new JournalEntry(entry.getKey(), entry.getValue()));
+        journalEntries.add(entry.getValue());
         entriesAdded++;
         if (entriesAdded == entriesToReturn) {
           break;
@@ -180,12 +193,11 @@ class Journal {
     List<JournalEntry> result = new ArrayList<>();
     // get current last Offset
     Offset lastOffset = getLastOffset();
-    journal.entrySet();
     if (lastOffset != null) {
       // get portion view of journal whose key is less than or equal to lastOffset
-      NavigableMap<Offset, StoreKey> journalView = journal.headMap(lastOffset, true);
-      for (Map.Entry<Offset, StoreKey> entry : journalView.entrySet()) {
-        result.add(new JournalEntry(entry.getKey(), entry.getValue()));
+      NavigableMap<Offset, JournalEntry> journalView = journal.headMap(lastOffset, true);
+      for (JournalEntry journalEntry : journalView.values()) {
+        result.add(journalEntry);
       }
     }
     return result;
@@ -195,7 +207,7 @@ class Journal {
    * @return the first/smallest offset in the journal or {@code null} if no such entry exists.
    */
   Offset getFirstOffset() {
-    Map.Entry<Offset, StoreKey> first = journal.firstEntry();
+    Map.Entry<Offset, JournalEntry> first = journal.firstEntry();
     return first == null ? null : first.getKey();
   }
 
@@ -203,7 +215,7 @@ class Journal {
    * @return the last/greatest offset in the journal or {@code null} if no such entry exists.
    */
   Offset getLastOffset() {
-    Map.Entry<Offset, StoreKey> last = journal.lastEntry();
+    Map.Entry<Offset, JournalEntry> last = journal.lastEntry();
     return last == null ? null : last.getKey();
   }
 
@@ -222,7 +234,8 @@ class Journal {
    * offset
    */
   StoreKey getKeyAtOffset(Offset offset) {
-    return journal.get(offset);
+    JournalEntry journalEntry = journal.get(offset);
+    return journalEntry == null ? null : journalEntry.getKey();
   }
 
   /**

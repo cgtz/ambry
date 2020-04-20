@@ -462,7 +462,15 @@ class PersistentIndex {
     } else {
       validIndexSegments.lastEntry().getValue().addEntry(entry, fileSpan.getEndOffset());
     }
-    journal.addEntry(entry.getValue().getOffset(), entry.getKey(), entry.getCrc());
+    IndexValue value = entry.getValue();
+    EnumSet<IndexEntryType> types = value.getIndexEntryTypes();
+    if (types.size() != 1) {
+       // Currently it is hard to tell if this is a possibility or not. To decouple the size limit fixes from this
+       // question, just emitting a metric but handling the multiple flag case.
+       logger.debug("IndexValue {} has more than one flag set: {}", value, types);
+       metrics.multipleFlagsInIndexValueCount.inc();
+    }
+    journal.addEntry(value.getOffset(), entry.getKey(), types, entry.getCrc());
   }
 
   /**
@@ -1165,7 +1173,7 @@ class PersistentIndex {
           for (JournalEntry entry : entries) {
             IndexValue value =
                 findKey(entry.getKey(), new FileSpan(entry.getOffset(), getCurrentEndOffset(indexSegments)),
-                    EnumSet.allOf(IndexEntryType.class), indexSegments);
+                    entry.getIndexEntryTypes(), indexSegments);
             messageEntries.add(new MessageInfo(entry.getKey(), value.getSize(), value.isDelete(), value.isTtlUpdate(),
                 value.isUndelete(), value.getExpiresAtMs(), null, value.getAccountId(), value.getContainerId(),
                 value.getOperationTimeInMs(), value.getLifeVersion()));
@@ -1516,7 +1524,7 @@ class PersistentIndex {
           }
           newTokenOffsetInJournal = entry.getOffset();
           IndexValue value = findKey(entry.getKey(), new FileSpan(entry.getOffset(), endOffsetOfSnapshot),
-              EnumSet.allOf(IndexEntryType.class), indexSegments);
+              entry.getIndexEntryTypes(), indexSegments);
           messageEntries.add(new MessageInfo(entry.getKey(), value.getSize(), value.isDelete(), value.isTtlUpdate(),
               value.isUndelete(), value.getExpiresAtMs(), null, value.getAccountId(), value.getContainerId(),
               value.getOperationTimeInMs(), value.getLifeVersion()));
