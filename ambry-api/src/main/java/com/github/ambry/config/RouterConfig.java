@@ -289,7 +289,7 @@ public class RouterConfig {
    * The version to use for new metadata blobs.
    */
   @Config(ROUTER_METADATA_CONTENT_VERSION)
-  @Default("2")
+  @Default("3")
   public final short routerMetadataContentVersion;
 
   /**
@@ -550,7 +550,7 @@ public class RouterConfig {
         verifiableProperties.getShortFromAllowedValues(ROUTER_BLOBID_CURRENT_VERSION, (short) 6,
             new Short[]{1, 2, 3, 4, 5, 6});
     routerMetadataContentVersion =
-        verifiableProperties.getShortFromAllowedValues(ROUTER_METADATA_CONTENT_VERSION, (short) 2, new Short[]{2, 3});
+        verifiableProperties.getShortFromAllowedValues(ROUTER_METADATA_CONTENT_VERSION, (short) 3, new Short[]{2, 3});
     routerKeyManagementServiceFactory =
         verifiableProperties.getString(ROUTER_KEY_MANAGEMENT_SERVICE_FACTORY, DEFAULT_KMS_FACTORY);
     routerCryptoServiceFactory =

@@ -22,6 +22,7 @@ import com.github.ambry.commons.ResponseHandler;
 import com.github.ambry.config.RouterConfig;
 import com.github.ambry.messageformat.BlobInfo;
 import com.github.ambry.messageformat.BlobProperties;
+import com.github.ambry.messageformat.CompositeBlobInfo.ChunkMetadata;
 import com.github.ambry.network.NetworkClient;
 import com.github.ambry.network.NetworkClientFactory;
 import com.github.ambry.network.RequestInfo;
@@ -30,7 +31,6 @@ import com.github.ambry.notification.NotificationSystem;
 import com.github.ambry.protocol.GetOption;
 import com.github.ambry.protocol.RequestOrResponse;
 import com.github.ambry.protocol.RequestOrResponseType;
-import com.github.ambry.store.StoreKey;
 import com.github.ambry.utils.Time;
 import com.github.ambry.utils.Utils;
 import java.io.Closeable;
@@ -47,7 +47,6 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -379,11 +378,11 @@ class NonBlockingRouter implements Router {
             blobIdStr, exception);
       } else if (result.getBlobResult != null) {
         logger.error("Unexpected result returned by background get operation to fetch chunk ids.");
-      } else if (result.storeKeys != null) {
-        List<BackgroundDeleteRequest> deleteRequests = new ArrayList<>(result.storeKeys.size());
-        for (StoreKey storeKey : result.storeKeys) {
-          logger.trace("Initiating delete of chunk blob: {}", storeKey);
-          deleteRequests.add(new BackgroundDeleteRequest(storeKey, serviceId));
+      } else if (result.chunkMetadataList != null) {
+        List<BackgroundDeleteRequest> deleteRequests = new ArrayList<>(result.chunkMetadataList.size());
+        for (ChunkMetadata chunkMetadata : result.chunkMetadataList) {
+          logger.trace("Initiating delete of chunk blob: {}", chunkMetadata.getStoreKey());
+          deleteRequests.add(new BackgroundDeleteRequest(chunkMetadata.getStoreKey(), serviceId));
         }
         initiateBackgroundDeletes(deleteRequests);
       }
@@ -417,29 +416,29 @@ class NonBlockingRouter implements Router {
   /**
    * Completes a updateBlobTtl operation by invoking the {@code callback} and setting the {@code futureResult} with the
    * given {@code routerException}.
-   * @param routerException {@link RouterException} to be set in the callback and future result
+   * @param exception {@link Exception} to be set in the callback and future result
    * @param futureResult the {@link FutureResult} that needs to be set.
    * @param callback that {@link Callback} that needs to be invoked. Can be null.
    */
-  private void completeUpdateBlobTtlOperation(RouterException routerException, FutureResult<Void> futureResult,
+  private void completeUpdateBlobTtlOperation(Exception exception, FutureResult<Void> futureResult,
       Callback<Void> callback) {
     routerMetrics.operationDequeuingRate.mark();
-    routerMetrics.onUpdateBlobTtlError(routerException);
-    completeOperation(futureResult, callback, null, routerException);
+    routerMetrics.onUpdateBlobTtlError(exception);
+    completeOperation(futureResult, callback, null, exception);
   }
 
   /**
    * Completes a undelete blob operation by invoking the {@code callback} and setting the {@code futureResult} with the
    * given {@code routerException}.
-   * @param routerException {@link RouterException} to be set in the callback and future result
+   * @param exception {@link Exception} to be set in the callback and future result
    * @param futureResult the {@link FutureResult} that needs to be set.
    * @param callback that {@link Callback} that needs to be invoked. Can be null.
    */
-  private void completeUndeleteBlobOperation(RouterException routerException, FutureResult<Void> futureResult,
+  private void completeUndeleteBlobOperation(Exception exception, FutureResult<Void> futureResult,
       Callback<Void> callback) {
     routerMetrics.operationDequeuingRate.mark();
-    routerMetrics.onUndeleteBlobError(routerException);
-    completeOperation(futureResult, callback, null, routerException);
+    routerMetrics.onUndeleteBlobError(exception);
+    completeOperation(futureResult, callback, null, exception);
   }
 
   /**
@@ -712,7 +711,20 @@ class NonBlockingRouter implements Router {
       if (!putManager.isOpen()) {
         handlePutManagerClosed(blobProperties, true, futureResult, callback);
       } else {
-        putManager.submitStitchBlobOperation(blobProperties, userMetadata, chunksToStitch, futureResult, callback);
+        BatchCallback<List<ChunkMetadata>> batchCallback =
+            new BatchCallback<>(chunksToStitch.size(), (childrenOfChunksToStitch, exception) -> {
+              if (exception != null) {
+                completeOperation(futureResult, callback, null, exception);
+              } else {
+                putManager.submitStitchBlobOperation(blobProperties, userMetadata, chunksToStitch,
+                    childrenOfChunksToStitch, futureResult, callback);
+              }
+            });
+        for (int i = 0; i < chunksToStitch.size(); i++) {
+          ChunkInfo chunkInfo = chunksToStitch.get(i);
+          doOperationTowardsMaybeCompositeBlob("STITCH BLOB", GetOption.None, chunkInfo.getBlobId(),
+              routerMetrics.ageAtTtlUpdate, batchCallback.getCallback(i));
+        }
         routerCallback.onPollReady();
       }
     }
@@ -763,13 +775,20 @@ class NonBlockingRouter implements Router {
      */
     protected void undeleteBlob(final String blobIdStr, final String serviceId, FutureResult<Void> futureResult,
         final Callback<Void> callback) {
-      doOperationTowardsMaybeCompositeBlob(blobIdStr, futureResult, callback,
-          new CompositeBlobOperationHelper("UNDELETE", GetOption.Include_Deleted_Blobs, routerMetrics.ageAtUndelete,
-              (blobIds) -> {
-                doUndeleteOperation(blobIds, serviceId, futureResult, callback);
-              }, (exception) -> {
-            completeUndeleteBlobOperation(exception, futureResult, callback);
-          }));
+      doOperationTowardsMaybeCompositeBlob("UNDELETE", GetOption.Include_Deleted_Blobs, blobIdStr,
+          routerMetrics.ageAtUndelete, (chunkMetadataList, exception) -> {
+            if (exception != null) {
+              completeUndeleteBlobOperation(exception, futureResult, callback);
+            } else {
+              List<String> blobIdStrs = new ArrayList<>();
+              blobIdStrs.add(blobIdStr);
+              if (chunkMetadataList != null) {
+                chunkMetadataList.forEach(chunkMetadata -> blobIdStrs.add(chunkMetadata.getStoreKey().getID()));
+              }
+              currentOperationsCount.addAndGet(blobIdStrs.size());
+              doUndeleteOperation(blobIdStrs, serviceId, futureResult, callback);
+            }
+          });
     }
 
     /**
@@ -784,58 +803,51 @@ class NonBlockingRouter implements Router {
      */
     protected void updateBlobTtl(final String blobIdStr, final String serviceId, long expiresAtMs,
         FutureResult<Void> futureResult, Callback<Void> callback) {
-      doOperationTowardsMaybeCompositeBlob(blobIdStr, futureResult, callback,
-          new CompositeBlobOperationHelper("TTL UPDATE", GetOption.None, routerMetrics.ageAtTtlUpdate, (blobIds) -> {
-            doUpdateTtlOperation(blobIds, serviceId, expiresAtMs, futureResult, callback);
-          }, (exception) -> {
-            completeUpdateBlobTtlOperation(exception, futureResult, callback);
-          }));
+      doOperationTowardsMaybeCompositeBlob("TTL UPDATE", GetOption.Include_Deleted_Blobs, blobIdStr,
+          routerMetrics.ageAtUndelete, (chunkMetadataList, exception) -> {
+            if (exception != null) {
+              completeUpdateBlobTtlOperation(exception, futureResult, callback);
+            } else {
+              List<String> blobIdStrs = new ArrayList<>();
+              blobIdStrs.add(blobIdStr);
+              if (chunkMetadataList != null) {
+                chunkMetadataList.forEach(chunkMetadata -> blobIdStrs.add(chunkMetadata.getStoreKey().getID()));
+              }
+              currentOperationsCount.addAndGet(blobIdStrs.size());
+              doUpdateTtlOperation(blobIdStrs, serviceId, expiresAtMs, futureResult, callback);
+            }
+          });
     }
 
-    /**
-     * A helper method to perform ttl update and undelete operation on a composite blob.
-     * @param blobIdStr The ID of the blob that needs the ttl update in string form
-     *                    permanent
-     * @param futureResult A future that would contain the BlobId eventually.
-     * @param callback The {@link Callback} which will be invoked on the completion of the request.
-     * @param helper The {@link CompositeBlobOperationHelper} that carries other information about this operation.
-     */
-    protected void doOperationTowardsMaybeCompositeBlob(final String blobIdStr, FutureResult<Void> futureResult,
-        Callback<Void> callback, CompositeBlobOperationHelper helper) {
+    protected void doOperationTowardsMaybeCompositeBlob(String opName, GetOption getOption, final String blobIdStr,
+        NonBlockingRouterMetrics.AgeAtAccessMetrics metrics, Callback<List<ChunkMetadata>> callback) {
       // Can skip GET if we can determine this is not a metadata blob
       if (isMaybeMetadataBlob(blobIdStr)) {
         Callback<GetBlobResultInternal> internalCallback = (GetBlobResultInternal result, Exception exception) -> {
           if (exception != null) {
-            completeOperation(futureResult, callback, null, exception, false);
+            callback.onCompletion(null, exception);
           } else if (result.getBlobResult != null) {
             exception = new RouterException(
-                String.format("GET blob call returned the blob instead of just the store keys (before {} )",
-                    helper.opName), RouterErrorCode.UnexpectedInternalError);
-            completeOperation(futureResult, callback, null, exception, false);
+                String.format("GET blob call returned the blob instead of just the store keys (before %s)", opName),
+                RouterErrorCode.UnexpectedInternalError);
+            callback.onCompletion(null, exception);
           } else {
-            List<String> blobIdStrs = new ArrayList<>();
-            blobIdStrs.add(blobIdStr);
-            if (result.storeKeys != null) {
-              result.storeKeys.forEach(key -> blobIdStrs.add(key.getID()));
-            }
-            currentOperationsCount.addAndGet(blobIdStrs.size());
-            helper.doOperation.accept(blobIdStrs);
+            callback.onCompletion(result.chunkMetadataList, null);
           }
         };
 
-        GetBlobOptions options = new GetBlobOptionsBuilder().operationType(GetBlobOptions.OperationType.All)
-            .getOption(helper.getOption)
-            .build();
-        GetBlobOptionsInternal optionsInternal = new GetBlobOptionsInternal(options, true, helper.metrics);
+        GetBlobOptions options =
+            new GetBlobOptionsBuilder().operationType(GetBlobOptions.OperationType.All).getOption(getOption).build();
+        GetBlobOptionsInternal optionsInternal = new GetBlobOptionsInternal(options, true, metrics);
         try {
           getBlob(blobIdStr, optionsInternal, internalCallback);
         } catch (RouterException e) {
-          helper.completeOperationAtException.accept(e);
+          callback.onCompletion(null, e);
         }
       } else {
         // do update directly on single blobId
         routerMetrics.skippedGetBlobCount.inc();
-        helper.doOperation.accept(Collections.singletonList(blobIdStr));
+        callback.onCompletion(null, null);
       }
     }
 
@@ -1097,37 +1109,6 @@ class NonBlockingRouter implements Router {
         logger.error("Background Deleter Operation Manager poll received an unexpected error: ", e);
         routerMetrics.operationManagerPollErrorCount.inc();
       }
-    }
-  }
-
-  /**
-   * A helper class that carries information for ttl update and undelete operation on a potential composite blob.
-   */
-  class CompositeBlobOperationHelper {
-    String opName;
-    GetOption getOption;
-    NonBlockingRouterMetrics.AgeAtAccessMetrics metrics;
-    Consumer<List<String>> doOperation;
-    Consumer<RouterException> completeOperationAtException;
-
-    /**
-     * Constructor of this helper object.
-     * @param opName The name of this operation.
-     * @param getOption The {@link GetOption} while fetching the blob ids of a composite blob.
-     * @param metrics The {@link NonBlockingRouterMetrics.AgeAtAccessMetrics} to use while fetching blob ids of a composite
-     *                blob with {@link GetManager}.
-     * @param doOperation The function to call to submit a list of blob ids in String to corresponding manager after fetching
-     *                    blob ids.
-     * @param completeOperationAtException The function to call when there is exception when calling {@link  #getBlob}.
-     */
-    CompositeBlobOperationHelper(String opName, GetOption getOption,
-        NonBlockingRouterMetrics.AgeAtAccessMetrics metrics, Consumer<List<String>> doOperation,
-        Consumer<RouterException> completeOperationAtException) {
-      this.opName = opName;
-      this.getOption = getOption;
-      this.metrics = metrics;
-      this.doOperation = doOperation;
-      this.completeOperationAtException = completeOperationAtException;
     }
   }
 }

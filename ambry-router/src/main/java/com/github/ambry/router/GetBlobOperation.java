@@ -41,7 +41,6 @@ import com.github.ambry.protocol.PartitionResponseInfo;
 import com.github.ambry.protocol.RequestOrResponse;
 import com.github.ambry.server.ServerErrorCode;
 import com.github.ambry.store.MessageInfo;
-import com.github.ambry.store.StoreKey;
 import com.github.ambry.utils.Time;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -208,8 +207,9 @@ class GetBlobOperation extends GetOperation {
           // result callback and no more chunks will be fetched, so mark the operation as complete to let the
           // GetManager remove this operation.
           setOperationCompleted();
-          List<StoreKey> chunkIds = e == null && compositeBlobInfo != null ? compositeBlobInfo.getKeys() : null;
-          operationResult = new GetBlobResultInternal(null, chunkIds);
+          List<CompositeBlobInfo.ChunkMetadata> chunkMetadataList =
+              e == null && compositeBlobInfo != null ? compositeBlobInfo.getChunkMetadataList() : null;
+          operationResult = new GetBlobResultInternal(null, chunkMetadataList);
         } else {
           // Complete the operation from the caller's perspective, so that the caller can start reading from the
           // channel if there is no exception. The operation will not be marked as complete internally as subsequent

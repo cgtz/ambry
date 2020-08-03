@@ -21,12 +21,12 @@ import com.github.ambry.commons.BlobIdFactory;
 import com.github.ambry.commons.Callback;
 import com.github.ambry.commons.ResponseHandler;
 import com.github.ambry.config.RouterConfig;
+import com.github.ambry.messageformat.CompositeBlobInfo;
 import com.github.ambry.network.RequestInfo;
 import com.github.ambry.network.ResponseInfo;
 import com.github.ambry.protocol.GetRequest;
 import com.github.ambry.protocol.GetResponse;
 import com.github.ambry.server.ServerErrorCode;
-import com.github.ambry.store.StoreKey;
 import com.github.ambry.utils.Time;
 import java.io.IOException;
 import java.util.HashMap;
@@ -289,16 +289,16 @@ class GetBlobOptionsInternal {
 }
 
 class GetBlobResultInternal {
-  GetBlobResult getBlobResult;
-  List<StoreKey> storeKeys;
+  final GetBlobResult getBlobResult;
+  final List<CompositeBlobInfo.ChunkMetadata> chunkMetadataList;
 
   /**
    * Construct a GetBlobResultInternal instance.
    * @param getBlobResult The {@link GetBlobResult} associated with this instance, if there is one..
-   * @param storeKeys The store keys associated with this instance, if there are any.
+   * @param chunkMetadataList The store keys associated with this instance, if there are any.
    */
-  public GetBlobResultInternal(GetBlobResult getBlobResult, List<StoreKey> storeKeys) {
+  public GetBlobResultInternal(GetBlobResult getBlobResult, List<CompositeBlobInfo.ChunkMetadata> chunkMetadataList) {
     this.getBlobResult = getBlobResult;
-    this.storeKeys = storeKeys;
+    this.chunkMetadataList = chunkMetadataList;
   }
 }

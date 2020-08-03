@@ -369,14 +369,12 @@ class PostBlobHandler {
         Map<String, String> metadata = idAndMetadata.getSecond();
 
         expectedSession = verifyChunkUploadSession(metadata, expectedSession);
-        @SuppressWarnings("ConstantConditions")
         long chunkSizeBytes = RestUtils.getLongHeader(metadata, RestUtils.Headers.BLOB_SIZE, true);
 
         totalStitchedBlobSize += chunkSizeBytes;
         // Expiration time is sent to the router, but not verified in this handler. The router is responsible for making
         // checks related to internal ambry requirements, like making sure that the chunks do not expire before the
         // metadata blob.
-        @SuppressWarnings("ConstantConditions")
         long expirationTimeMs = RestUtils.getLongHeader(metadata, EXPIRATION_TIME_MS_KEY, true);
         verifyChunkAccountAndContainer(blobId, stitchedBlobProperties);
 

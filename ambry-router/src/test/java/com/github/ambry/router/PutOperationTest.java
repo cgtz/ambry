@@ -21,6 +21,7 @@ import com.github.ambry.commons.LoggingNotificationSystem;
 import com.github.ambry.config.RouterConfig;
 import com.github.ambry.config.VerifiableProperties;
 import com.github.ambry.messageformat.BlobProperties;
+import com.github.ambry.messageformat.CompositeBlobInfo;
 import com.github.ambry.network.NetworkReceive;
 import com.github.ambry.network.RequestInfo;
 import com.github.ambry.network.ResponseInfo;
@@ -37,6 +38,7 @@ import com.github.ambry.utils.Utils;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -322,10 +324,14 @@ public class PutOperationTest {
     MockNetworkClient mockNetworkClient = new MockNetworkClient();
     List<ChunkInfo> chunksToStitch =
         RouterTestHelpers.buildChunkList(mockClusterMap, BlobId.BlobDataType.DATACHUNK, Utils.Infinite_Time,
-            LongStream.of(10, 10, 11));
+            LongStream.of(10, 20));
+    chunksToStitch.add(
+        new ChunkInfo(RouterTestHelpers.getRandomBlobId(mockClusterMap, BlobId.BlobDataType.METADATA), 25,
+            Utils.Infinite_Time));
+    List<List<CompositeBlobInfo.ChunkMetadata>> childrenOfChunksToStitch = Collections.nCopies(3, null);
     PutOperation op =
         PutOperation.forStitching(routerConfig, routerMetrics, mockClusterMap, new LoggingNotificationSystem(),
-            new InMemAccountService(true, false), userMetadata, chunksToStitch, future, null,
+            new InMemAccountService(true, false), userMetadata, chunksToStitch, childrenOfChunksToStitch, future, null,
             new RouterCallback(mockNetworkClient, new ArrayList<>()), null, null, null, time, blobProperties,
             MockClusterMap.DEFAULT_PARTITION_CLASS);
     // Trigger an exception by making the last chunk size too large.

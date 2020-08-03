@@ -15,11 +15,14 @@ package com.github.ambry.router;
 
 import com.github.ambry.commons.BlobId;
 import com.github.ambry.commons.Callback;
+import com.github.ambry.utils.Utils;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReferenceArray;
 
 
 /**
@@ -59,7 +62,12 @@ class BatchOperationCallbackTracker {
   Callback<Void> getCallback(final BlobId blobId) {
     return (result, exception) -> {
       if (exception == null) {
-        if (blobIdToAck.put(blobId, true)) {
+        Boolean prev = blobIdToAck.put(blobId, true);
+        if (prev == null) {
+          // unrecognized blob ID
+          complete(new RouterException("Ack for unknown blob " + blobId + " received",
+              RouterErrorCode.UnexpectedInternalError));
+        } else if (prev) {
           // already acked once
           complete(new RouterException("Ack for " + blobId + " arrived more than once",
               RouterErrorCode.UnexpectedInternalError));
@@ -83,3 +91,4 @@ class BatchOperationCallbackTracker {
     }
   }
 }
+

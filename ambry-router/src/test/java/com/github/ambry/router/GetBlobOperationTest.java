@@ -1460,12 +1460,12 @@ public class GetBlobOperationTest {
             if (blobSize > maxChunkSize) {
               // CompositeBlob
               Assert.assertNotNull("CompositeBlob should return a list of blob ids when getting chunk ids",
-                  result.storeKeys);
-              Assert.assertEquals(result.storeKeys.size(), (blobSize + maxChunkSize - 1) / maxChunkSize);
+                  result.chunkMetadataList);
+              Assert.assertEquals(result.chunkMetadataList.size(), (blobSize + maxChunkSize - 1) / maxChunkSize);
             } else {
               // SimpleBlob
               Assert.assertNull("Unexpected list of blob id when getChunkIdsOnly is true on a simple blob",
-                  result.storeKeys);
+                  result.chunkMetadataList);
             }
             readCompleteLatch.countDown();
             return;

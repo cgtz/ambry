@@ -27,6 +27,7 @@ import com.github.ambry.commons.Callback;
 import com.github.ambry.config.RouterConfig;
 import com.github.ambry.messageformat.BlobProperties;
 import com.github.ambry.messageformat.BlobType;
+import com.github.ambry.messageformat.CompositeBlobInfo.ChunkMetadata;
 import com.github.ambry.messageformat.MessageFormatRecord;
 import com.github.ambry.messageformat.MetadataContentSerDe;
 import com.github.ambry.network.Port;
@@ -99,6 +100,7 @@ class PutOperation {
   private final ReadableStreamChannel channel;
   // provided for stitched uploads
   private final List<ChunkInfo> chunksToStitch;
+  private final List<List<ChunkMetadata>> childrenOfChunksToStitch;
   private final ByteBufferAsyncWritableChannel chunkFillerChannel;
   private final FutureResult<String> futureResult;
   private final Callback<String> callback;
@@ -189,7 +191,7 @@ class PutOperation {
       CryptoService cryptoService, CryptoJobHandler cryptoJobHandler, Time time, BlobProperties blobProperties,
       String partitionClass) {
     return new PutOperation(routerConfig, routerMetrics, clusterMap, notificationSystem, accountService, userMetadata,
-        channel, null, options, futureResult, callback, routerCallback, writableChannelEventListener, kms,
+        channel, null, null, options, futureResult, callback, routerCallback, writableChannelEventListener, kms,
         cryptoService, cryptoJobHandler, time, blobProperties, partitionClass);
   }
 
@@ -206,6 +208,7 @@ class PutOperation {
    * @param chunksToStitch the list of chunks to stitch together. The put operation business logic will treat the
    *                       metadata in the {@link ChunkInfo} object as a source of truth when validating that the
    *                       chunks can be stitched.
+   * @param childrenOfChunksToStitch
    * @param futureResult the future that will contain the result of the operation.
    * @param callback the callback that is to be called when the operation completes.
    * @param routerCallback The {@link RouterCallback} to use for callbacks to the router.
@@ -219,12 +222,13 @@ class PutOperation {
    */
   static PutOperation forStitching(RouterConfig routerConfig, NonBlockingRouterMetrics routerMetrics,
       ClusterMap clusterMap, NotificationSystem notificationSystem, AccountService accountService, byte[] userMetadata,
-      List<ChunkInfo> chunksToStitch, FutureResult<String> futureResult, Callback<String> callback,
-      RouterCallback routerCallback, KeyManagementService kms, CryptoService cryptoService,
-      CryptoJobHandler cryptoJobHandler, Time time, BlobProperties blobProperties, String partitionClass) {
+      List<ChunkInfo> chunksToStitch, List<List<ChunkMetadata>> childrenOfChunksToStitch,
+      FutureResult<String> futureResult, Callback<String> callback, RouterCallback routerCallback,
+      KeyManagementService kms, CryptoService cryptoService, CryptoJobHandler cryptoJobHandler, Time time,
+      BlobProperties blobProperties, String partitionClass) {
     return new PutOperation(routerConfig, routerMetrics, clusterMap, notificationSystem, accountService, userMetadata,
-        null, chunksToStitch, PutBlobOptions.DEFAULT, futureResult, callback, routerCallback, null, kms, cryptoService,
-        cryptoJobHandler, time, blobProperties, partitionClass);
+        null, chunksToStitch, childrenOfChunksToStitch, PutBlobOptions.DEFAULT, futureResult, callback, routerCallback,
+        null, kms, cryptoService, cryptoJobHandler, time, blobProperties, partitionClass);
   }
 
   /**
@@ -238,6 +242,7 @@ class PutOperation {
    * @param userMetadata the userMetadata associated with the put operation.
    * @param channel the {@link ReadableStreamChannel} containing the blob data, or null for stitch requests.
    * @param chunksToStitch the list of chunks to stitch together, or null for data upload put operations.
+   * @param childrenOfChunksToStitch
    * @param options The {@link PutBlobOptions} associated with the request. This cannot be null.
    * @param futureResult the future that will contain the result of the operation.
    * @param callback the callback that is to be called when the operation completes.
@@ -252,11 +257,11 @@ class PutOperation {
    */
   private PutOperation(RouterConfig routerConfig, NonBlockingRouterMetrics routerMetrics, ClusterMap clusterMap,
       NotificationSystem notificationSystem, AccountService accountService, byte[] userMetadata,
-      ReadableStreamChannel channel, List<ChunkInfo> chunksToStitch, PutBlobOptions options,
-      FutureResult<String> futureResult, Callback<String> callback, RouterCallback routerCallback,
-      ByteBufferAsyncWritableChannel.ChannelEventListener writableChannelEventListener, KeyManagementService kms,
-      CryptoService cryptoService, CryptoJobHandler cryptoJobHandler, Time time, BlobProperties blobProperties,
-      String partitionClass) {
+      ReadableStreamChannel channel, List<ChunkInfo> chunksToStitch, List<List<ChunkMetadata>> childrenOfChunksToStitch,
+      PutBlobOptions options, FutureResult<String> futureResult, Callback<String> callback,
+      RouterCallback routerCallback, ByteBufferAsyncWritableChannel.ChannelEventListener writableChannelEventListener,
+      KeyManagementService kms, CryptoService cryptoService, CryptoJobHandler cryptoJobHandler, Time time,
+      BlobProperties blobProperties, String partitionClass) {
     submissionTimeMs = time.milliseconds();
     this.routerConfig = routerConfig;
     this.routerMetrics = routerMetrics;
@@ -269,6 +274,7 @@ class PutOperation {
     this.channel = channel;
     this.options = options;
     this.chunksToStitch = chunksToStitch;
+    this.childrenOfChunksToStitch = childrenOfChunksToStitch;
     this.futureResult = futureResult;
     this.callback = callback;
     this.routerCallback = routerCallback;
@@ -344,17 +350,37 @@ class PutOperation {
       // The current metadata format does not support empty chunk lists
       throw new RouterException("Must provide at least one chunk for stitchBlob call",
           RouterErrorCode.InvalidPutArgument);
+    } else if (chunksToStitch.size() != childrenOfChunksToStitch.size()) {
+      throw new RouterException("Unexpected size of child chunk list. chunksToStitch.size=" + chunksToStitch.size()
+          + ", childrenOfChunksToStitch.size=" + childrenOfChunksToStitch.size(),
+          RouterErrorCode.UnexpectedInternalError);
     }
     long totalSize = 0;
     long intermediateChunkSize =
-        routerConfig.routerMetadataContentVersion == MessageFormatRecord.Metadata_Content_Version_V2
-            ? chunksToStitch.get(0).getChunkSizeInBytes() : routerConfig.routerMaxPutChunkSizeBytes;
+        fixedChunkSizesOnly() ? chunksToStitch.get(0).getChunkSizeInBytes() : routerConfig.routerMaxPutChunkSizeBytes;
     metadataPutChunk.setIntermediateChunkSize(intermediateChunkSize);
+    int chunkIndexInMetadata = 0;
     for (ListIterator<ChunkInfo> iter = chunksToStitch.listIterator(); iter.hasNext(); ) {
-      int chunkIndex = iter.nextIndex();
+      int parentChunkIndex = iter.nextIndex();
       ChunkInfo chunkInfo = iter.next();
+      List<ChunkMetadata> childChunks = childrenOfChunksToStitch.get(parentChunkIndex);
       BlobId chunkId = unwrapChunkInfo(chunkInfo, intermediateChunkSize, !iter.hasNext());
-      metadataPutChunk.addChunkId(chunkId, chunkInfo.getChunkSizeInBytes(), chunkIndex);
+
+      if (childChunks == null) {
+        metadataPutChunk.addChunkId(chunkId, chunkInfo.getChunkSizeInBytes(), chunkIndexInMetadata++);
+      } else {
+        long sizeObserved = 0;
+        for (ChunkMetadata childChunk : childChunks) {
+          metadataPutChunk.addChunkId(childChunk.getStoreKey(), childChunk.getSize(), chunkIndexInMetadata++);
+          sizeObserved += childChunk.getSize();
+        }
+        if (sizeObserved != chunkInfo.getChunkSizeInBytes()) {
+          // if this is the case, something went wrong with fetching data chunks
+          throw new RouterException(
+              "Size of child chunks (" + sizeObserved + ") did not match size reported in chunkInfo: " + chunkInfo,
+              RouterErrorCode.UnexpectedInternalError);
+        }
+      }
       totalSize += chunkInfo.getChunkSizeInBytes();
     }
     blobSize = totalSize;
@@ -367,7 +393,6 @@ class PutOperation {
    * @param chunkInfo the {@link ChunkInfo} containing the blob ID and extra metadata.
    * @param intermediateChunkSize the size in bytes that intermediate chunks must be with the current metadata format.
    * @param lastChunk {@code true} if this is the last chunk in the list of blobs to stitch.
-   * @return the {@link BlobId}.
    * @throws RouterException if validation of the chunk or blob ID parsing failed.
    */
   private BlobId unwrapChunkInfo(ChunkInfo chunkInfo, long intermediateChunkSize, boolean lastChunk)
@@ -375,9 +400,7 @@ class PutOperation {
     long chunkSize = chunkInfo.getChunkSizeInBytes();
     long chunkExpirationTimeInMs = chunkInfo.getExpirationTimeInMs();
 
-    if (chunkSize == 0 || chunkSize > intermediateChunkSize || (
-        routerConfig.routerMetadataContentVersion == MessageFormatRecord.Metadata_Content_Version_V2 && !lastChunk
-            && chunkSize < intermediateChunkSize)) {
+    if (chunkSize == 0 || (fixedChunkSizesOnly() && !lastChunk && chunkSize < intermediateChunkSize)) {
       throw new RouterException(
           "Invalid chunkSize for " + (lastChunk ? "last" : "intermediate") + " chunk: " + chunkSize
               + "; intermediateChunkSize: " + intermediateChunkSize, RouterErrorCode.InvalidPutArgument);
@@ -394,11 +417,15 @@ class PutOperation {
 
     BlobId blobId = RouterUtils.getBlobIdFromString(chunkInfo.getBlobId(), clusterMap);
     // the metadata blob format does not support nested composite blobs.
-    if (blobId.getBlobDataType() != BlobDataType.DATACHUNK) {
+    if (fixedChunkSizesOnly() && blobId.getBlobDataType() != BlobDataType.DATACHUNK) {
       throw new RouterException("Cannot stitch together multiple composite blobs", RouterErrorCode.InvalidBlobId);
     }
 
     return blobId;
+  }
+
+  private boolean fixedChunkSizesOnly() {
+    return routerConfig.routerMetadataContentVersion == MessageFormatRecord.Metadata_Content_Version_V2;
   }
 
   /**
@@ -1657,7 +1684,7 @@ class PutOperation {
               passedInBlobProperties.getAccountId(), passedInBlobProperties.getContainerId(),
               passedInBlobProperties.isEncrypted(), passedInBlobProperties.getExternalAssetTag());
       if (isStitchOperation() || getNumDataChunks() > 1) {
-        ByteBuffer serialized = null;
+        ByteBuffer serialized;
         // values returned are in the right order as TreeMap returns them in key-order.
         if (routerConfig.routerMetadataContentVersion == MessageFormatRecord.Metadata_Content_Version_V2) {
           serialized = MetadataContentSerDe.serializeMetadataContentV2(intermediateChunkSize, getBlobSize(),
