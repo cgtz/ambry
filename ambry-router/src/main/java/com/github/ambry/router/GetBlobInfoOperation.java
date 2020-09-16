@@ -222,7 +222,7 @@ class GetBlobInfoOperation extends GetOperation {
             new RouterException("Response deserialization received an unexpected error",
                 RouterErrorCode.UnexpectedInternalError));
       } else {
-        if (getResponse.getCorrelationId() != correlationId) {
+        if (!responseInfo.isFromCache() && getResponse.getCorrelationId() != correlationId) {
           // The NetworkClient associates a response with a request based on the fact that only one request is sent
           // out over a connection id, and the response received on a connection id must be for the latest request
           // sent over it. The check here ensures that is indeed the case. If not, log an error and fail this request.

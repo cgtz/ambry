@@ -239,6 +239,7 @@ project(':ambry-network') {
         compile "io.netty:netty-tcnative-boringssl-static:$nettyTcnativeVersion"
         compile "io.netty:netty-transport-native-epoll:$nettyVersion"
         compile "io.dropwizard.metrics:metrics-core:$metricsVersion"
+        compile 'com.github.ben-manes.caffeine:caffeine:2.8.5'
         testCompile project(':ambry-test-utils')
     }
 }

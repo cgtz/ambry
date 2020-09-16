@@ -28,7 +28,8 @@ public class ResponseInfo extends AbstractByteBufHolder<ResponseInfo> {
   private final RequestInfo requestInfo;
   private final NetworkClientErrorCode error;
   private final DataNodeId dataNode;
-  private ByteBuf content;
+  private final ByteBuf content;
+  private final boolean fromCache;
 
   /**
    * Constructs a ResponseInfo with the given parameters.
@@ -40,6 +41,10 @@ public class ResponseInfo extends AbstractByteBufHolder<ResponseInfo> {
     this(requestInfo, error, content, requestInfo == null ? null : requestInfo.getReplicaId().getDataNodeId());
   }
 
+  public ResponseInfo(RequestInfo requestInfo, ByteBuf content) {
+    this(requestInfo, null, content, requestInfo == null ? null : requestInfo.getReplicaId().getDataNodeId(), true);
+  }
+
   /**
    * Constructs a ResponseInfo with the given parameters.
    * @param requestInfo the {@link RequestInfo} associated with this response.
@@ -48,10 +53,15 @@ public class ResponseInfo extends AbstractByteBufHolder<ResponseInfo> {
    * @param dataNode the {@link DataNodeId} of this request.
    */
   public ResponseInfo(RequestInfo requestInfo, NetworkClientErrorCode error, ByteBuf content, DataNodeId dataNode) {
+    this(requestInfo, error, content, dataNode, false);
+  }
+
+  public ResponseInfo(RequestInfo requestInfo, NetworkClientErrorCode error, ByteBuf content, DataNodeId dataNode, boolean fromCache) {
     this.requestInfo = requestInfo;
     this.error = error;
     this.content = content;
     this.dataNode = dataNode;
+    this.fromCache = fromCache;
   }
 
   /**
@@ -73,6 +83,10 @@ public class ResponseInfo extends AbstractByteBufHolder<ResponseInfo> {
    */
   public DataNodeId getDataNode() {
     return dataNode;
+  }
+
+  public boolean isFromCache() {
+    return fromCache;
   }
 
   @Override

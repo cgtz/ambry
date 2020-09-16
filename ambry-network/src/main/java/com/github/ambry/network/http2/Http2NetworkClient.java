@@ -14,13 +14,21 @@
 package com.github.ambry.network.http2;
 
 import com.github.ambry.clustermap.DataNodeId;
+import com.github.ambry.commons.BlobId;
 import com.github.ambry.commons.SSLFactory;
 import com.github.ambry.config.Http2ClientConfig;
+import com.github.ambry.messageformat.MessageFormatFlags;
 import com.github.ambry.network.NetworkClient;
 import com.github.ambry.network.NetworkClientErrorCode;
 import com.github.ambry.network.RequestInfo;
 import com.github.ambry.network.ResponseInfo;
+import com.github.ambry.protocol.GetRequest;
 import com.github.ambry.protocol.RequestOrResponse;
+import com.github.ambry.utils.Pair;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.RemovalCause;
+import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
@@ -40,6 +48,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -62,6 +71,25 @@ public class Http2NetworkClient implements NetworkClient {
   private final Map<Integer, Channel> correlationIdInFlightToChannelMap;
   static final AttributeKey<RequestInfo> REQUEST_INFO = AttributeKey.newInstance("RequestInfo");
 
+  /**
+   * This is a cache for basic prototyping. It will attempt to cache any get response it gets back from the server.
+   * The data structure is in heap, but the content should always be off-heap direct buffers (I hope).
+   * Cache size is calculated using the sum of the off-heap size.
+   * Note that cached responses still have to be deserialized (and maybe decrypted) by the router
+   */
+  private static final Cache<Pair<BlobId, MessageFormatFlags>, ByteBuf> hackyGetResponseCache = Caffeine.newBuilder()
+      .expireAfterAccess(5, TimeUnit.MINUTES)
+      .maximumWeight(12L * 1024 * 1024 * 1024)
+      .weigher((Pair<BlobId, MessageFormatFlags> key, ByteBuf content) -> content.readableBytes())
+      .removalListener((Pair<BlobId, MessageFormatFlags> key, ByteBuf content, RemovalCause cause) -> {
+        logger.info("Item removed from cache because of {}: {}={} ", cause, key, content);
+        if (content != null) {
+          // i hope this is truly called on all removals to avoid off-heap memory leaks
+          content.release();
+        }
+      })
+      .build();
+
   public Http2NetworkClient(Http2ClientMetrics http2ClientMetrics, Http2ClientConfig http2ClientConfig,
       SSLFactory sslFactory, EventLoopGroup eventLoopGroup) {
     logger.info("Http2NetworkClient started");
@@ -79,7 +107,6 @@ public class Http2NetworkClient implements NetworkClient {
   @Override
   public List<ResponseInfo> sendAndPoll(List<RequestInfo> requestsToSend, Set<Integer> requestsToDrop,
       int pollTimeoutMs) {
-
     List<ResponseInfo> readyResponseInfos = new ArrayList<>();
     if (requestsToDrop.size() != 0) {
       logger.warn("Number of requestsToDrop: {}", requestsToDrop.size());
@@ -109,6 +136,15 @@ public class Http2NetworkClient implements NetworkClient {
       long waitingTime = streamInitiateTime - request.requestCreateTime;
       http2ClientMetrics.requestToNetworkClientLatencyMs.update(waitingTime);
 
+      if (request instanceof GetRequest) {
+        GetRequest getRequest = (GetRequest) request;
+        BlobId blobId = (BlobId) getRequest.getPartitionInfoList().get(0).getBlobIds().get(0);
+        ByteBuf content = hackyGetResponseCache.getIfPresent(new Pair<>(blobId, getRequest.getMessageFormatFlag()));
+        if (content != null) {
+          readyResponseInfos.add(new ResponseInfo(requestInfo, content.retainedDuplicate()));
+          continue;
+        }
+      }
       this.pools.get(InetSocketAddress.createUnresolved(requestInfo.getHost(), requestInfo.getPort().getPort()))
           .acquire()
           .addListener((GenericFutureListener<Future<Channel>>) future -> {
@@ -178,7 +214,16 @@ public class Http2NetworkClient implements NetworkClient {
 
     http2ClientResponseHandler.getResponseInfoQueue().poll(readyResponseInfos, pollTimeoutMs);
     for (ResponseInfo responseInfo : readyResponseInfos) {
-      correlationIdInFlightToChannelMap.remove(responseInfo.getRequestInfo().getRequest().getCorrelationId());
+      if (!responseInfo.isFromCache()) {
+        correlationIdInFlightToChannelMap.remove(responseInfo.getRequestInfo().getRequest().getCorrelationId());
+        if (responseInfo.content() != null && responseInfo.getRequestInfo().getRequest() instanceof GetRequest) {
+          // this is bad because it caches server error responses too
+          GetRequest getRequest = (GetRequest) responseInfo.getRequestInfo().getRequest();
+          BlobId blobId = (BlobId) getRequest.getPartitionInfoList().get(0).getBlobIds().get(0);
+          hackyGetResponseCache.put(new Pair<>(blobId, getRequest.getMessageFormatFlag()),
+              responseInfo.content().retainedDuplicate());
+        }
+      }
     }
 
     http2ClientMetrics.http2ClientSendRate.mark(readyResponseInfos.size());
